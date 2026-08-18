@@ -1,0 +1,14 @@
+name: Publicar en Facebook
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publicar mensaje de prueba
+        run: |
+          curl -X POST "https://graph.facebook.com/v26.0/${{ secrets.FB_PAGE_ID }}/feed" \
+            -d "message=¡Hola! Esta es una publicación automática desde GitHub Actions 🚀" \
+            -d "access_token=${{ secrets.FB_PAGE_ACCESS_TOKEN }}"
