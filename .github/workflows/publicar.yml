@@ -1,6 +1,9 @@
 name: Publicar en Facebook
 
 on:
+  schedule:
+    # Publica automáticamente todos los días a las 9:00 AM (hora de Lima, Perú)
+    - cron: '0 14 * * *'
   workflow_dispatch:
 
 jobs:
