@@ -56,9 +56,9 @@ prompt_completo = (
 )
 
 # ==========================================
-# 3. GENERACIÓN DE TEXTO CON GEMINI
+# 3. GENERACIÓN DE TEXTO CON GEMINI (3.6 / 3.7)
 # ==========================================
-modelos = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"]
+modelos = ["gemini-3.6-flash", "gemini-3.7-flash"]
 respuesta_texto = None
 
 for modelo in modelos:
