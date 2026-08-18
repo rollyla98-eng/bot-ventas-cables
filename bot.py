@@ -1,56 +1,83 @@
 import os
 import time
+import urllib.parse
 import requests
 from google import genai
 
-# Leer las claves secretas configuradas en GitHub
+# Leer claves secretas de GitHub
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 FB_PAGE_ID = os.environ.get("FB_PAGE_ID")
 FB_PAGE_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
 
-# Configurar el cliente de Gemini
+# Configurar cliente de Gemini
 client = genai.Client(api_key=GEMINI_KEY)
 
-prompt = (
-    "Genera una publicación corta, llamativa y con emojis para Facebook "
-    "promocionando cables de carga rápida, cargadores y accesorios para la página El Comelon 420. "
-    "Incluye llamado a la acción para pedidos por mensaje o WhatsApp. No incluyas comillas ni explicaciones adicionales."
+# 1. GENERAR TEXTO PUBLICITARIO Y PROMPT VISUAL CON GEMINI
+prompt_completo = (
+    "Eres el creador de contenido de la tienda 'El Comelon 420'. "
+    "Elige al azar uno de estos productos: cables de carga rápida reforzados, cargadores de alta potencia tipo C, "
+    "adaptadores de carga para autos/motos, o powerbanks con pantalla digital. "
+    "Genera dos cosas separadas por el texto '---PROMPT_IMG---':\n"
+    "1. Una publicación llamativa para Facebook con emojis, llamada a la acción y WhatsApp.\n"
+    "---PROMPT_IMG---\n"
+    "2. Una descripción corta en inglés para generar una foto publicitaria 8k realista del producto con iluminación neón y fondo oscuro elegante."
 )
 
-# Lista de modelos y reintentos automáticos
 modelos = ["gemini-3.6-flash", "gemini-3.7-flash"]
-mensaje_generado = None
+respuesta_texto = None
 
 for modelo in modelos:
     for intento in range(3):
         try:
-            print(f"Generando texto con {modelo} (intento {intento + 1})...")
+            print(f"Consultando a {modelo}...")
             response = client.models.generate_content(
                 model=modelo,
-                contents=prompt,
+                contents=prompt_completo,
             )
-            mensaje_generado = response.text.strip()
+            respuesta_texto = response.text.strip()
             break
         except Exception as e:
-            print(f"Servidor ocupado, reintentando en 3s... ({e})")
+            print(f"Reintentando conexión... ({e})")
             time.sleep(3)
-    if mensaje_generado:
+    if respuesta_texto:
         break
 
-if not mensaje_generado:
-    raise Exception("Los servidores de IA están ocupados temporalmente. Intenta nuevamente en un minuto.")
+# Separar texto para Facebook y descripción para la imagen
+if "---PROMPT_IMG---" in respuesta_texto:
+    partes = respuesta_texto.split("---PROMPT_IMG---")
+    mensaje_facebook = partes[0].strip()
+    prompt_imagen_ia = partes[1].strip().replace("\n", " ")
+else:
+    mensaje_facebook = respuesta_texto
+    prompt_imagen_ia = "Commercial product photography of fast charging braided USB cables, neon studio lights, 8k render, photorealistic"
 
-print("--- TEXTO GENERADO POR IA ---")
-print(mensaje_generado)
+print("--- MENSAJE FACEBOOK ---")
+print(mensaje_facebook)
+print("--- PROMPT DE LA FOTO DIBUJADA ---")
+print(prompt_imagen_ia)
 
-# Publicar el mensaje en Facebook Graph API
-url = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/feed"
+# 2. LA IA DIBUJA LA IMAGEN DEL PRODUCTO
+print("--- GENERANDO FOTO CON IA ---")
+url_imagen_ia = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt_imagen_ia)}?width=1080&height=1080&nologo=true&seed={int(time.time())}"
+
+img_response = requests.get(url_imagen_ia, timeout=30)
+nombre_archivo = "foto_producto_ia.jpg"
+
+with open(nombre_archivo, "wb") as f:
+    f.write(img_response.content)
+
+print(f"Foto generada con éxito: {nombre_archivo}")
+
+# 3. PUBLICAR LA FOTO + TEXTO EN FACEBOOK
+url_fb = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/photos"
 payload = {
-    "message": mensaje_generado,
+    "caption": mensaje_facebook,
     "access_token": FB_PAGE_TOKEN
 }
 
-fb_response = requests.post(url, data=payload)
+with open(nombre_archivo, "rb") as f:
+    files = {"source": f}
+    fb_response = requests.post(url_fb, data=payload, files=files)
 
 print("--- RESPUESTA DE FACEBOOK ---")
 print(fb_response.json())
