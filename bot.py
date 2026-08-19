@@ -1,7 +1,6 @@
 import os
 import time
 import random
-import urllib.parse
 import requests
 from google import genai
 
@@ -15,45 +14,56 @@ FB_PAGE_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
 client = genai.Client(api_key=GEMINI_KEY)
 
 # ==========================================
-# 2. PRODUCTOS Y PROMPTS VISUALES EXACTOS
+# 2. CATÁLOGO REAL CON ÁNGULOS PSICOLÓGICOS
 # ==========================================
-PRODUCTOS_LDNIO = [
+CATALOGO_LDNIO = [
     {
-        "producto": "Cable original LDNIO Tipo C a Tipo C (doble punta Tipo C)",
-        "beneficio": "Carga ultra rápida Power Delivery (PD) de alta potencia para celulares modernos y laptops. Trenzado de alta densidad que no se rompe.",
-        "prompt_img": "Commercial product photography of a premium braided dual USB-C to USB-C charging cable, neatly coiled on a modern wooden desk, showing both metal USB-C connector tips clearly in focus, clean studio lighting, 8k photorealistic"
+        "archivo_foto": "cable_65w.jpg",
+        "nombre": "Cable LDNIO 65W Turbo Power USB-C a USB-C (1 Metro)",
+        "especificaciones": "Potencia Turbo 65W, tecnología Power Delivery (PD), chip inteligente que no calienta el equipo. Para celulares de gama alta, tablets y laptops.",
+        "arquetipo_publico": "Jóvenes universitarios, gamers, creadores de contenido y usuarios exigentes que odian esperar horas para que su celular llegue al 100%."
     },
     {
-        "producto": "Cable original LDNIO Tipo C a USB estándar reforzado",
-        "beneficio": "Compatible con cargadores estándar, motos, autos y computadoras. Protección reforzada en las uniones para máxima durabilidad.",
-        "prompt_img": "Commercial product photography of a durable black braided USB-A to USB-C charging cable, neatly coiled on a sleek surface, sharp focus on the metal USB connectors, studio lighting, 8k retail photography"
-    },
-    {
-        "producto": "Cable original LDNIO de carga rápida para iPhone (Lightning / Tipo C a Lightning)",
-        "beneficio": "Carga estable y segura sin errores de compatibilidad en iOS, transferencia rápida de datos y blindaje anti-tirones.",
-        "prompt_img": "Commercial product photography of a premium nylon braided charging cable for Apple iPhone, showing the silver Lightning connector head clearly, coiled neatly on a minimalist desk, bright professional studio lighting, 8k photorealistic"
-    },
-    {
-        "producto": "Combo Pro: Cable reforzado LDNIO + Dado (cabezal) de carga rápida",
-        "beneficio": "Kit completo listo para usar en pared. Carga a máxima velocidad protegiendo la vida útil de la batería contra sobrecalentamiento.",
-        "prompt_img": "Commercial product photography of a fast-charging set: a braided USB cable neatly plugged into a compact white wall charger adapter cube, placed on a clean modern tabletop, 8k photorealistic commercial shot"
+        "archivo_foto": "cable_ls441.jpg",
+        "nombre": "Cable LDNIO LS441 Carga Rápida 2.4A (1 Metro)",
+        "especificaciones": "Carga rápida 2.4A Max, sincronización de datos, material TPE flexible con protección anti-tirones y uniones reforzadas.",
+        "arquetipo_publico": "Gente en constante movimiento, delivery, choferes, estudiantes y trabajadores que necesitan un cable de uso rudo que no se rompa ni se pele al doblarlo."
     }
 ]
 
-seleccion = random.choice(PRODUCTOS_LDNIO)
+producto_hoy = random.choice(CATALOGO_LDNIO)
 
-prompt_completo = (
-    f"Eres el redactor comercial de la tienda de tecnología 'ARO Tech'. "
-    f"Crea un post publicitario persuasivo y directo para Facebook vendiendo el producto: {seleccion['producto']}. "
-    f"Destaca que es de la prestigiosa marca internacional LDNIO, conocida por su extrema durabilidad y velocidad real de carga. "
-    f"Beneficio clave a resaltar: {seleccion['beneficio']}. "
-    "Menciona que se acabaron los cables desechables que se doblan o dejan de cargar en pocas semanas. "
-    "Usa emojis estratégicos, llamado a la acción claro y tono vendedor profesional. "
-    "NO incluyas números de teléfono ni enlaces en este texto, solo el copy de venta."
+# Gatillos psicológicos y situaciones cotidianas que conectan con jóvenes
+GATILLOS_PSICOLOGICOS = [
+    "EL DOLOR DE LA BATERÍA BAJA EN EL PEOR MOMENTO: Estar en la calle, jugando Free Fire/TikTok o a punto de salir y tener solo 4% de batería con un cargador genérico que no sube nada.",
+    "LO BARATO SALE CARO: La rabia de gastar 5 o 10 soles en cables bamba que duran una semana, dejan de cargar y terminan malogrando el pin de carga o la batería del teléfono.",
+    "USO RUDO Y CERO ESTRÉS: La tranquilidad de tener un cable original LDNIO reforzado que puedes meter a la mochila, doblar o jalar sin miedo a que se rompa el cuello del conector.",
+    "POTENCIA Y VELOCIDAD REAL: La satisfacción de ver el aviso de 'Carga Rápida / Turbo Charge' activado en pantalla y tener tu cel listo para el día en minutos."
+]
+
+gatillo_del_dia = random.choice(GATILLOS_PSICOLOGICOS)
+
+# ==========================================
+# 3. PROMPT ESTRATÉGICO DE NEUROMARKETING
+# ==========================================
+prompt_marketing = (
+    "Eres un copywriter experto en neuromarketing digital y ventas en redes sociales para la tienda 'ARO Tech'.\n"
+    "Tu objetivo es crear un post publicitario altamente persuasivo, moderno y viral para Facebook e Instagram.\n\n"
+    f"📌 PRODUCTO: {producto_hoy['nombre']}\n"
+    f"📌 DETALLES TÉCNICOS: {producto_hoy['especificaciones']}\n"
+    f"📌 PÚBLICO OBJETIVO: {producto_hoy['arquetipo_publico']}\n"
+    f"🎯 ENFOQUE PSICOLÓGICO DE HOY: {gatillo_del_dia}\n\n"
+    "REGLAS OBLIGATORIAS DE REDACCIÓN:\n"
+    "1. GANCHO INICIAL DISRUPTIVO (Hook): Inicia con una pregunta o frase corta que capture la atención en los primeros 2 segundos.\n"
+    "2. IDENTIFICACIÓN Y DOLOR: Toca la emoción cotidiana del usuario (frustración con cables malos vs. la solución definitiva).\n"
+    "3. BENEFICIOS CLAROS (No solo datos técnicos): Explica cómo LDNIO le soluciona la vida real.\n"
+    "4. TONO: Juvenil, dinámico, seguro, con autoridad tecnológica y emojis bien colocados. Cero texto aburrido.\n"
+    "5. LLAMADO A LA ACCIÓN (CTA): Invita a asegurar su cable escribiendo al WhatsApp antes de que se agoten.\n"
+    "6. IMPORTANTE: NO inventes números de teléfono ni enlaces en el cuerpo del texto (el pie de página ya los contiene)."
 )
 
 # ==========================================
-# 3. GENERACIÓN DE TEXTO CON GEMINI
+# 4. GENERACIÓN DE TEXTO CON GEMINI
 # ==========================================
 modelos = ["gemini-3.6-flash", "gemini-3.7-flash"]
 cuerpo_mensaje = None
@@ -61,10 +71,10 @@ cuerpo_mensaje = None
 for modelo in modelos:
     for intento in range(3):
         try:
-            print(f"Generando texto con {modelo}...")
+            print(f"Generando copy estratégico con {modelo}...")
             response = client.models.generate_content(
                 model=modelo,
-                contents=prompt_completo,
+                contents=prompt_marketing,
             )
             if response.text:
                 cuerpo_mensaje = response.text.strip()
@@ -78,101 +88,48 @@ for modelo in modelos:
 if not cuerpo_mensaje:
     raise Exception("No se pudo obtener respuesta de la API de Gemini.")
 
-# Usamos directamente el prompt visual optimizado del producto
-prompt_imagen_ia = seleccion["prompt_img"]
-
 # ==========================================
-# 4. PIE DE CONTACTO FIJO CON WHATSAPP
+# 5. PIE DE CONTACTO Y CONVERSIÓN
 # ==========================================
 pie_contacto = (
     "\n\n══════════════════════════════\n"
-    "⚡ **ARO Tech | Distribuidor de Accesorios LDNIO** ⚡\n"
-    "🔌 Calidad original LDNIO: Carga rápida y cables reforzados\n"
-    "🔌 Modelos: Tipo C a Tipo C | Tipo C a USB | iPhone (Lightning)\n"
-    "🔌 Consulta por tu combo con dado / cabezal de carga rápida\n"
-    "💳 Pagos: Contraentrega / Yape / Plin / Transferencias\n"
+    "⚡ **ARO Tech | Accesorios & Cables LDNIO Originales** ⚡\n"
+    f"🔌 Modelo en promoción: {producto_hoy['nombre']}\n"
+    "🔌 100% Original | Carga Rápida Real | Blindaje Antiroturas\n"
+    "🔌 Consulta también por combos con dado / cabezal de pared\n"
+    "💳 Medios de pago: Yape / Plin / Transferencias / Contraentrega\n"
     "📦 Envíos rápidos y seguros a todo Lima\n"
     "══════════════════════════════\n"
-    "📲 **Haz tu pedido al WhatsApp:** +51 910 371 606\n"
-    "👉 **Pide directo con un clic aquí:** https://wa.me/51910371606?text=Hola%20ARO%20Tech,%20quiero%20hacer%20un%20pedido%20de%20cables%20LDNIO\n\n"
-    "#AROTech #LDNIO #CablesLDNIO #CargaRapida #CablesTipoC #CablesiPhone #AccesoriosLima #TecnologiaPeru"
+    "📲 **Pide el tuyo al WhatsApp:** +51 910 371 606\n"
+    "👉 **Haz clic aquí y haz tu pedido al instante:** https://wa.me/51910371606?text=Hola%20ARO%20Tech,%20quiero%20hacer%20un%20pedido%20de%20cables%20LDNIO\n\n"
+    "#AROTech #LDNIO #CablesLDNIO #CargaRapida #CablesTipoC #CablesiPhone #GamingPeru #AccesoriosLima #TecnologiaPeru"
 )
 
 mensaje_final_fb = f"{cuerpo_mensaje}{pie_contacto}"
 
 # ==========================================
-# 5. GENERACIÓN Y DESCARGA DE IMAGEN
+# 6. VERIFICACIÓN Y PUBLICACIÓN EN FACEBOOK
 # ==========================================
-print("--- GENERANDO FOTO CON IA ---")
-print("Prompt visual:", prompt_imagen_ia)
-semilla = int(time.time())
-url_imagen_ia = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt_imagen_ia)}?width=1080&height=1080&nologo=true&seed={semilla}"
+foto_a_publicar = producto_hoy["archivo_foto"]
 
-img_response = requests.get(url_imagen_ia, timeout=45)
-img_response.raise_for_status()
+if not os.path.exists(foto_a_publicar):
+    raise Exception(f"No se encontró el archivo '{foto_a_publicar}' en el repositorio. Asegúrate de haberlo subido.")
 
-nombre_archivo = "foto_publicacion.jpg"
-with open(nombre_archivo, "wb") as f:
-    f.write(img_response.content)
-
-print(f"Foto generada y guardada: {nombre_archivo}")
-
-# ==========================================
-# 6. PUBLICACIÓN EN FACEBOOK Y EN INSTAGRAM
-# ==========================================
-
-# --- A) PUBLICAR EN FACEBOOK ---
-print("--- PUBLICANDO EN FACEBOOK ---")
+print(f"--- PUBLICANDO EN FACEBOOK CON FOTO: {foto_a_publicar} ---")
 url_fb = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/photos"
-payload_fb = {
+payload = {
     "caption": mensaje_final_fb,
     "access_token": FB_PAGE_TOKEN
 }
 
-with open(nombre_archivo, "rb") as f:
+with open(foto_a_publicar, "rb") as f:
     files = {"source": f}
-    fb_response = requests.post(url_fb, data=payload_fb, files=files)
+    fb_response = requests.post(url_fb, data=payload, files=files)
 
 resultado_fb = fb_response.json()
 print("Respuesta de Facebook:", resultado_fb)
 
 if "id" in resultado_fb:
-    print("✅ ¡Publicado con éxito en Facebook!")
+    print("✅ ¡Publicación psicológica y comercial creada con éxito en Facebook!")
 else:
-    raise Exception(f"❌ Error en Facebook: {resultado_fb}")
-
-# --- B) PUBLICAR EN INSTAGRAM ---
-print("--- PUBLICANDO EN INSTAGRAM ---")
-try:
-    url_ig_account = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}?fields=instagram_business_account&access_token={FB_PAGE_TOKEN}"
-    res_ig = requests.get(url_ig_account).json()
-    
-    if "instagram_business_account" in res_ig:
-        ig_user_id = res_ig["instagram_business_account"]["id"]
-        
-        url_crear_media = f"https://graph.facebook.com/v20.0/{ig_user_id}/media"
-        payload_media = {
-            "image_url": url_imagen_ia,
-            "caption": mensaje_final_fb,
-            "access_token": FB_PAGE_TOKEN
-        }
-        res_media = requests.post(url_crear_media, data=payload_media).json()
-        
-        if "id" in res_media:
-            creation_id = res_media["id"]
-            time.sleep(5)
-            
-            url_publicar_ig = f"https://graph.facebook.com/v20.0/{ig_user_id}/media_publish"
-            payload_publicar = {
-                "creation_id": creation_id,
-                "access_token": FB_PAGE_TOKEN
-            }
-            res_final_ig = requests.post(url_publicar_ig, data=payload_publicar).json()
-            print("Respuesta de Instagram:", res_final_ig)
-            print("✅ ¡Publicado con éxito en Instagram!")
-        else:
-            print(f"⚠️ No se pudo crear el contenedor en Instagram: {res_media}")
-    else:
-        print("ℹ️ No hay cuenta de Instagram vinculada a esta página de Facebook.")
-except Exception as err:
-    print(f"⚠️ Error al conectar con Instagram: {err}")
+    raise Exception(f"❌ Error al publicar en Facebook: {resultado_fb}")
