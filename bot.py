@@ -1,135 +1,181 @@
 import os
-import time
 import random
+import time
 import requests
-from google import genai
+import google.generativeai as genai
 
 # ==========================================
-# 1. CREDENCIALES
+# 1. CATÁLOGO DE PRODUCTOS (FOTOS Y VIDEOS)
 # ==========================================
-GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
-FB_PAGE_ID = os.environ.get("FB_PAGE_ID")
-FB_PAGE_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
+# Cuando quieras agregar más fotos o videos en el futuro,
+# solo súbelos a GitHub y añade un bloque aquí abajo.
 
-client = genai.Client(api_key=GEMINI_KEY)
-
-# ==========================================
-# 2. CATÁLOGO REAL CON ÁNGULOS PSICOLÓGICOS
-# ==========================================
-CATALOGO_LDNIO = [
+CATALOGO = [
     {
-        "archivo_foto": "cable_65w.jpg",
-        "nombre": "Cable LDNIO 65W Turbo Power USB-C a USB-C (1 Metro)",
-        "especificaciones": "Potencia Turbo 65W, tecnología Power Delivery (PD), chip inteligente que no calienta el equipo. Para celulares de gama alta, tablets y laptops.",
-        "arquetipo_publico": "Jóvenes universitarios, gamers, creadores de contenido y usuarios exigentes que odian esperar horas para que su celular llegue al 100%."
+        "archivo": "cable_65w.jpg",
+        "tipo": "foto",
+        "nombre": "Cable LDNIO 65W Carga Ultra Rápida",
+        "detalles": "Potencia de 65W ideal para laptops, celulares y tablets. Conectores reforzados y máxima durabilidad.",
+        "precio": "S/ 35"
     },
     {
-        "archivo_foto": "cable_ls441.jpg",
-        "nombre": "Cable LDNIO LS441 Carga Rápida 2.4A (1 Metro)",
-        "especificaciones": "Carga rápida 2.4A Max, sincronización de datos, material TPE flexible con protección anti-tirones y uniones reforzadas.",
-        "arquetipo_publico": "Gente en constante movimiento, delivery, choferes, estudiantes y trabajadores que necesitan un cable de uso rudo que no se rompa ni se pele al doblarlo."
+        "archivo": "cable_ls441.jpg",
+        "tipo": "foto",
+        "nombre": "Cable LDNIO LS441 TPE Charge & Sync",
+        "detalles": "Material TPE ultra flexible y resistente a tirones. Carga rápida y transferencia de datos estable.",
+        "precio": "S/ 25"
+    },
+    {
+        "archivo": "video_cable.mp4",
+        "tipo": "video",
+        "nombre": "Cable de Carga Rápida LDNIO de Alta Resistencia",
+        "detalles": "Demostración de durabilidad, flexibilidad extrema y velocidad de carga en segundos.",
+        "precio": "S/ 35"
     }
 ]
 
-producto_hoy = random.choice(CATALOGO_LDNIO)
+# ==========================================
+# 2. CONFIGURACIÓN DE APIS Y VARIABLES
+# ==========================================
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+FB_PAGE_ID = os.environ.get("FB_PAGE_ID")
+FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
+IG_USER_ID = os.environ.get("IG_USER_ID")
+GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "")
 
-# Gatillos psicológicos y situaciones cotidianas que conectan con jóvenes
-GATILLOS_PSICOLOGICOS = [
-    "EL DOLOR DE LA BATERÍA BAJA EN EL PEOR MOMENTO: Estar en la calle, jugando Free Fire/TikTok o a punto de salir y tener solo 4% de batería con un cargador genérico que no sube nada.",
-    "LO BARATO SALE CARO: La rabia de gastar 5 o 10 soles en cables bamba que duran una semana, dejan de cargar y terminan malogrando el pin de carga o la batería del teléfono.",
-    "USO RUDO Y CERO ESTRÉS: La tranquilidad de tener un cable original LDNIO reforzado que puedes meter a la mochila, doblar o jalar sin miedo a que se rompa el cuello del conector.",
-    "POTENCIA Y VELOCIDAD REAL: La satisfacción de ver el aviso de 'Carga Rápida / Turbo Charge' activado en pantalla y tener tu cel listo para el día en minutos."
-]
+# Configurar Gemini
+genai.configure(api_key=GEMINI_API_KEY)
 
-gatillo_del_dia = random.choice(GATILLOS_PSICOLOGICOS)
+
+def generar_texto_venta(producto):
+    """Usa la IA de Gemini para redactar un anuncio comercial persuasivo."""
+    prompt = f"""
+    Eres un experto en marketing digital y ventas en redes sociales en Perú.
+    Escribe un post persuasivo y llamativo para Facebook e Instagram vendiendo el siguiente producto:
+
+    - Producto: {producto['nombre']}
+    - Características clave: {producto['detalles']}
+    - Precio referencia: {producto['precio']}
+    - Formato de publicación: {'Video/Reel' if producto['tipo'] == 'video' else 'Foto de producto'}
+
+    Estructura requerida:
+    1. Gancho inicial potente (emojis y pregunta o beneficio directo).
+    2. 2 o 3 beneficios destacados con viñetas claras.
+    3. Llamado a la acción claro (escribir al DM o al WhatsApp para pedidos contra entrega / envíos).
+    4. 4 a 6 hashtags relevantes (#CargaRapida #LDNIO #AccesoriosCelular #TecnologiaPeru #Lima).
+
+    Mantén el tono directo, confiable y vendedor. No incluyas notas explicativas, solo el texto final listo para publicar.
+    """
+    
+    modelo = genai.GenerativeModel("gemini-1.5-flash")
+    respuesta = modelo.generate_content(prompt)
+    return respuesta.text.strip()
+
+
+def publicar_en_facebook(producto, texto):
+    """Publica foto o video en la página de Facebook."""
+    if not FB_PAGE_ID or not FB_PAGE_ACCESS_TOKEN:
+        print("⚠️ Variables de Facebook no configuradas. Saltando...")
+        return
+
+    archivo = producto["archivo"]
+    if not os.path.exists(archivo):
+        print(f"❌ Error: El archivo {archivo} no existe en el repositorio.")
+        return
+
+    if producto["tipo"] == "foto":
+        url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos"
+        with open(archivo, "rb") as f:
+            files = {"source": f}
+            data = {
+                "caption": texto,
+                "access_token": FB_PAGE_ACCESS_TOKEN
+            }
+            res = requests.post(url, files=files, data=data)
+            print(f"📡 Respuesta Facebook Foto: {res.status_code} - {res.text}")
+
+    elif producto["tipo"] == "video":
+        url = f"https://graph-video.facebook.com/v19.0/{FB_PAGE_ID}/videos"
+        with open(archivo, "rb") as f:
+            files = {"source": f}
+            data = {
+                "description": texto,
+                "title": producto["nombre"],
+                "access_token": FB_PAGE_ACCESS_TOKEN
+            }
+            res = requests.post(url, files=files, data=data)
+            print(f"📡 Respuesta Facebook Video: {res.status_code} - {res.text}")
+
+
+def publicar_en_instagram(producto, texto):
+    """Publica foto o video/Reel en la cuenta de Instagram conectada."""
+    if not IG_USER_ID or not FB_PAGE_ACCESS_TOKEN or not GITHUB_REPOSITORY:
+        print("⚠️ Variables de Instagram no configuradas o incompletas. Saltando...")
+        return
+
+    # URL pública del archivo en tu repositorio de GitHub
+    url_media = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/{producto['archivo']}"
+
+    # Paso 1: Crear contenedor de medios
+    url_crear = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media"
+    
+    if producto["tipo"] == "foto":
+        payload = {
+            "image_url": url_media,
+            "caption": texto,
+            "access_token": FB_PAGE_ACCESS_TOKEN
+        }
+    else:  # video / reel
+        payload = {
+            "media_type": "REELS",
+            "video_url": url_media,
+            "caption": texto,
+            "access_token": FB_PAGE_ACCESS_TOKEN
+        }
+
+    res_crear = requests.post(url_crear, data=payload)
+    datos_crear = res_crear.json()
+    print(f"📡 Creación contenedor Instagram: {datos_crear}")
+
+    creation_id = datos_crear.get("id")
+    if not creation_id:
+        print("❌ No se pudo crear el contenedor en Instagram.")
+        return
+
+    # Esperar procesamiento (especialmente importante para videos)
+    if producto["tipo"] == "video":
+        print("⏳ Procesando video en Instagram (esperando 20 segundos)...")
+        time.sleep(20)
+    else:
+        time.sleep(5)
+
+    # Paso 2: Publicar el contenedor
+    url_publicar = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish"
+    res_publicar = requests.post(url_publicar, data={
+        "creation_id": creation_id,
+        "access_token": FB_PAGE_ACCESS_TOKEN
+    })
+    print(f"📡 Publicación Instagram final: {res_publicar.status_code} - {res_publicar.text}")
+
 
 # ==========================================
-# 3. PROMPT ESTRATÉGICO DE NEUROMARKETING
+# 3. EJECUCIÓN PRINCIPAL
 # ==========================================
-prompt_marketing = (
-    "Eres un copywriter experto en neuromarketing digital y ventas en redes sociales para la tienda 'ARO Tech'.\n"
-    "Tu objetivo es crear un post publicitario altamente persuasivo, moderno y viral para Facebook e Instagram.\n\n"
-    f"📌 PRODUCTO: {producto_hoy['nombre']}\n"
-    f"📌 DETALLES TÉCNICOS: {producto_hoy['especificaciones']}\n"
-    f"📌 PÚBLICO OBJETIVO: {producto_hoy['arquetipo_publico']}\n"
-    f"🎯 ENFOQUE PSICOLÓGICO DE HOY: {gatillo_del_dia}\n\n"
-    "REGLAS OBLIGATORIAS DE REDACCIÓN:\n"
-    "1. GANCHO INICIAL DISRUPTIVO (Hook): Inicia con una pregunta o frase corta que capture la atención en los primeros 2 segundos.\n"
-    "2. IDENTIFICACIÓN Y DOLOR: Toca la emoción cotidiana del usuario (frustración con cables malos vs. la solución definitiva).\n"
-    "3. BENEFICIOS CLAROS (No solo datos técnicos): Explica cómo LDNIO le soluciona la vida real.\n"
-    "4. TONO: Juvenil, dinámico, seguro, con autoridad tecnológica y emojis bien colocados. Cero texto aburrido.\n"
-    "5. LLAMADO A LA ACCIÓN (CTA): Invita a asegurar su cable escribiendo al WhatsApp antes de que se agoten.\n"
-    "6. IMPORTANTE: NO inventes números de teléfono ni enlaces en el cuerpo del texto (el pie de página ya los contiene)."
-)
+if __name__ == "__main__":
+    # Elegir un producto al azar (foto o video)
+    producto_seleccionado = random.choice(CATALOGO)
+    print(f"🎯 Producto elegido hoy: {producto_seleccionado['nombre']} ({producto_seleccionado['tipo']})")
 
-# ==========================================
-# 4. GENERACIÓN DE TEXTO CON GEMINI
-# ==========================================
-modelos = ["gemini-3.6-flash", "gemini-3.7-flash"]
-cuerpo_mensaje = None
+    # Generar copy publicitario con IA
+    print("🤖 Generando texto publicitario con Gemini...")
+    texto_publicacion = generar_texto_venta(producto_seleccionado)
+    print("\n--- Texto Generado ---\n" + texto_publicacion + "\n----------------------\n")
 
-for modelo in modelos:
-    for intento in range(3):
-        try:
-            print(f"Generando copy estratégico con {modelo}...")
-            response = client.models.generate_content(
-                model=modelo,
-                contents=prompt_marketing,
-            )
-            if response.text:
-                cuerpo_mensaje = response.text.strip()
-                break
-        except Exception as e:
-            print(f"Reintento {intento + 1} en {modelo}: {e}")
-            time.sleep(3)
-    if cuerpo_mensaje:
-        break
+    # Publicar en las plataformas
+    print("🚀 Publicando en Facebook...")
+    publicar_en_facebook(producto_seleccionado, texto_publicacion)
 
-if not cuerpo_mensaje:
-    raise Exception("No se pudo obtener respuesta de la API de Gemini.")
+    print("🚀 Publicando en Instagram...")
+    publicar_en_instagram(producto_seleccionado, texto_publicacion)
 
-# ==========================================
-# 5. PIE DE CONTACTO Y CONVERSIÓN
-# ==========================================
-pie_contacto = (
-    "\n\n══════════════════════════════\n"
-    "⚡ **ARO Tech | Accesorios & Cables LDNIO Originales** ⚡\n"
-    f"🔌 Modelo en promoción: {producto_hoy['nombre']}\n"
-    "🔌 100% Original | Carga Rápida Real | Blindaje Antiroturas\n"
-    "🔌 Consulta también por combos con dado / cabezal de pared\n"
-    "💳 Medios de pago: Yape / Plin / Transferencias / Contraentrega\n"
-    "📦 Envíos rápidos y seguros a todo Lima\n"
-    "══════════════════════════════\n"
-    "📲 **Pide el tuyo al WhatsApp:** +51 910 371 606\n"
-    "👉 **Haz clic aquí y haz tu pedido al instante:** https://wa.me/51910371606?text=Hola%20ARO%20Tech,%20quiero%20hacer%20un%20pedido%20de%20cables%20LDNIO\n\n"
-    "#AROTech #LDNIO #CablesLDNIO #CargaRapida #CablesTipoC #CablesiPhone #GamingPeru #AccesoriosLima #TecnologiaPeru"
-)
-
-mensaje_final_fb = f"{cuerpo_mensaje}{pie_contacto}"
-
-# ==========================================
-# 6. VERIFICACIÓN Y PUBLICACIÓN EN FACEBOOK
-# ==========================================
-foto_a_publicar = producto_hoy["archivo_foto"]
-
-if not os.path.exists(foto_a_publicar):
-    raise Exception(f"No se encontró el archivo '{foto_a_publicar}' en el repositorio. Asegúrate de haberlo subido.")
-
-print(f"--- PUBLICANDO EN FACEBOOK CON FOTO: {foto_a_publicar} ---")
-url_fb = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/photos"
-payload = {
-    "caption": mensaje_final_fb,
-    "access_token": FB_PAGE_TOKEN
-}
-
-with open(foto_a_publicar, "rb") as f:
-    files = {"source": f}
-    fb_response = requests.post(url_fb, data=payload, files=files)
-
-resultado_fb = fb_response.json()
-print("Respuesta de Facebook:", resultado_fb)
-
-if "id" in resultado_fb:
-    print("✅ ¡Publicación psicológica y comercial creada con éxito en Facebook!")
-else:
-    raise Exception(f"❌ Error al publicar en Facebook: {resultado_fb}")
+    print("✅ Proceso completado exitosamente.")
