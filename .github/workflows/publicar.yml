@@ -15,11 +15,11 @@ jobs:
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Instalar librerías de IA y Redes
         run: |
-          pip install google-generativeai requests
+          pip install google-genai requests
 
       - name: Ejecutar Bot de Publicación
         env:
