@@ -1,10 +1,9 @@
-name: Publicar en Facebook
+name: Publicar en Facebook e Instagram
 
 on:
+  workflow_dispatch: # Botón manual
   schedule:
-    # Publica automáticamente todos los días a las 9:00 AM (hora de Lima, Perú)
-    - cron: '0 14 * * *'
-  workflow_dispatch:
+    - cron: '0 14 * * *' # 9:00 AM hora de Perú (14:00 UTC)
 
 jobs:
   publicar:
@@ -18,12 +17,15 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Instalar librerías
-        run: pip install -r requirements.txt
+      - name: Instalar librerías de IA y Redes
+        run: |
+          pip install google-generativeai requests
 
-      - name: Generar y publicar post con IA
+      - name: Ejecutar Bot de Publicación
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: python bot.py
