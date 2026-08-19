@@ -63,7 +63,7 @@ def generar_texto_venta(producto):
     
     cliente = genai.Client(api_key=GEMINI_API_KEY)
     respuesta = cliente.models.generate_content(
-        model='gemini-2.5-flash',
+        model='gemini-3.6-flash',
         contents=prompt,
     )
     return respuesta.text.strip()
