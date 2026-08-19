@@ -2,14 +2,11 @@ import os
 import random
 import time
 import requests
-import google.generativeai as genai
+from google import genai
 
 # ==========================================
 # 1. CATÁLOGO DE PRODUCTOS (FOTOS Y VIDEOS)
 # ==========================================
-# Cuando quieras agregar más fotos o videos en el futuro,
-# solo súbelos a GitHub y añade un bloque aquí abajo.
-
 CATALOGO = [
     {
         "archivo": "cable_65w.jpg",
@@ -43,12 +40,9 @@ FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
 IG_USER_ID = os.environ.get("IG_USER_ID")
 GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "")
 
-# Configurar Gemini
-genai.configure(api_key=GEMINI_API_KEY)
-
 
 def generar_texto_venta(producto):
-    """Usa la IA de Gemini para redactar un anuncio comercial persuasivo."""
+    """Usa la IA oficial de Gemini para redactar un anuncio comercial persuasivo."""
     prompt = f"""
     Eres un experto en marketing digital y ventas en redes sociales en Perú.
     Escribe un post persuasivo y llamativo para Facebook e Instagram vendiendo el siguiente producto:
@@ -67,8 +61,11 @@ def generar_texto_venta(producto):
     Mantén el tono directo, confiable y vendedor. No incluyas notas explicativas, solo el texto final listo para publicar.
     """
     
-    modelo = genai.GenerativeModel("gemini-1.5-flash")
-    respuesta = modelo.generate_content(prompt)
+    cliente = genai.Client(api_key=GEMINI_API_KEY)
+    respuesta = cliente.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=prompt,
+    )
     return respuesta.text.strip()
 
 
@@ -113,10 +110,7 @@ def publicar_en_instagram(producto, texto):
         print("⚠️ Variables de Instagram no configuradas o incompletas. Saltando...")
         return
 
-    # URL pública del archivo en tu repositorio de GitHub
     url_media = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/{producto['archivo']}"
-
-    # Paso 1: Crear contenedor de medios
     url_crear = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media"
     
     if producto["tipo"] == "foto":
@@ -142,14 +136,12 @@ def publicar_en_instagram(producto, texto):
         print("❌ No se pudo crear el contenedor en Instagram.")
         return
 
-    # Esperar procesamiento (especialmente importante para videos)
     if producto["tipo"] == "video":
         print("⏳ Procesando video en Instagram (esperando 20 segundos)...")
         time.sleep(20)
     else:
         time.sleep(5)
 
-    # Paso 2: Publicar el contenedor
     url_publicar = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish"
     res_publicar = requests.post(url_publicar, data={
         "creation_id": creation_id,
@@ -162,16 +154,13 @@ def publicar_en_instagram(producto, texto):
 # 3. EJECUCIÓN PRINCIPAL
 # ==========================================
 if __name__ == "__main__":
-    # Elegir un producto al azar (foto o video)
     producto_seleccionado = random.choice(CATALOGO)
     print(f"🎯 Producto elegido hoy: {producto_seleccionado['nombre']} ({producto_seleccionado['tipo']})")
 
-    # Generar copy publicitario con IA
     print("🤖 Generando texto publicitario con Gemini...")
     texto_publicacion = generar_texto_venta(producto_seleccionado)
     print("\n--- Texto Generado ---\n" + texto_publicacion + "\n----------------------\n")
 
-    # Publicar en las plataformas
     print("🚀 Publicando en Facebook...")
     publicar_en_facebook(producto_seleccionado, texto_publicacion)
 
