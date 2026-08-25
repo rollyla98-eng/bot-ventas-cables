@@ -61,7 +61,7 @@ dia_actual = DIAS_SEMANA[datetime.datetime.now().weekday()]
 
 
 def generar_texto_venta(producto):
-    """Usa Gemini con ganchos dinámicos y enlaces directos de compra."""
+    """Usa Gemini para redactar el post persuasivo."""
     angulo = random.choice(ANGULOS_VENTA)
     mensaje_wsp = urllib.parse.quote(f"Hola, quiero pedir el {producto['nombre']} que vi en su publicación.")
     link_wsp = f"https://wa.me/51910371606?text={mensaje_wsp}"
@@ -90,7 +90,7 @@ def generar_texto_venta(producto):
 
     cliente = genai.Client(api_key=GEMINI_API_KEY)
     respuesta = cliente.models.generate_content(
-        model='gemini-2.5-flash',
+        model='gemini-3.6-flash',
         contents=prompt,
     )
     return respuesta.text.strip()
@@ -123,7 +123,6 @@ def publicar_en_instagram(producto, texto):
         print("⚠️ Instagram no configurado o incompleto.")
         return
 
-    # Usamos main y quote para soportar nombres con espacios como "cable tipo c.mp4"
     archivo_codificado = urllib.parse.quote(producto['archivo'])
     url_media = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/{archivo_codificado}"
     url_crear = f"https://graph.facebook.com/v20.0/{IG_USER_ID}/media"
