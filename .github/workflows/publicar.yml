@@ -1,13 +1,17 @@
 name: Publicar en Facebook e Instagram
 
 on:
-  workflow_dispatch: # Botón manual
+  workflow_dispatch: # Botón para publicar manualmente cuando quieras
   schedule:
-    - cron: '0 14 * * *' # 9:00 AM hora de Perú (14:00 UTC)
+    # 2 publicaciones al día en horarios clave (Hora Perú):
+    - cron: '0 18 * * *' # 1:00 PM (Hora de almuerzo)
+    - cron: '0 1 * * *'  # 8:00 PM (Horario estelar de compras)
 
 jobs:
   publicar:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
     steps:
       - name: Descargar repositorio
         uses: actions/checkout@v4
@@ -16,9 +20,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Instalar librerías de IA y Redes
         run: |
+          python -m pip install --upgrade pip
           pip install google-genai requests
 
       - name: Ejecutar Bot de Publicación
