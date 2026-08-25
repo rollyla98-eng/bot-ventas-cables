@@ -1,11 +1,13 @@
+import datetime
 import os
 import random
 import time
+import urllib.parse
 import requests
 from google import genai
 
 # ==========================================
-# 1. CATÁLOGO DE PRODUCTOS (FOTOS Y VIDEOS)
+# 1. CATÁLOGO DE PRODUCTOS
 # ==========================================
 CATALOGO = [
     {
@@ -13,14 +15,14 @@ CATALOGO = [
         "tipo": "foto",
         "nombre": "Cable LDNIO 65W Carga Ultra Rápida",
         "detalles": "Potencia de 65W ideal para laptops, celulares y tablets. Conectores reforzados y máxima durabilidad.",
-        "precio": "S/ 35"
+        "precio": "S/ 35 (Lleva 2 por S/ 60)"
     },
     {
         "archivo": "cable_ls441.jpg",
         "tipo": "foto",
         "nombre": "Cable LDNIO LS441 TPE Charge & Sync",
-        "detalles": "Material TPE ultra flexible y resistente a tirones. Carga rápida y transferencia de datos estable.",
-        "precio": "S/ 25"
+        "detalles": "Material TPE ultra flexible y resistente a tirones. Carga rápida y transferencia estable.",
+        "precio": "S/ 25 (Lleva 2 por S/ 45)"
     },
     {
         "archivo": "video_cable.mp4",
@@ -31,36 +33,54 @@ CATALOGO = [
     }
 ]
 
+ANGULOS_VENTA = [
+    "Enfoque en evitar la molestia de cables descartables que se rompen en la punta.",
+    "Enfoque en velocidad de carga rápida para no perder tiempo pegado al tomacorriente.",
+    "Enfoque en llevar el combo de 2 unidades para tener uno en casa y otro en el trabajo/auto.",
+    "Enfoque en seguridad para la batería de celulares y laptops gama media y alta."
+]
+
 # ==========================================
-# 2. CONFIGURACIÓN DE APIS Y VARIABLES
+# 2. CONFIGURACIÓN DE VARIABLES
 # ==========================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 FB_PAGE_ID = os.environ.get("FB_PAGE_ID")
 FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
 IG_USER_ID = os.environ.get("IG_USER_ID")
-GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "")
+GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "rollyla98-eng/bot-ventas-cables")
+
+DIAS_SEMANA = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+dia_actual = DIAS_SEMANA[datetime.datetime.now().weekday()]
 
 
 def generar_texto_venta(producto):
-    """Usa la IA oficial de Gemini para redactar un anuncio comercial persuasivo."""
+    """Usa Gemini con ganchos dinámicos y enlaces directos de compra."""
+    angulo = random.choice(ANGULOS_VENTA)
+    mensaje_wsp = urllib.parse.quote(f"Hola, quiero pedir el {producto['nombre']} que vi en su publicación.")
+    link_wsp = f"https://wa.me/51910371606?text={mensaje_wsp}"
+
     prompt = f"""
-    Eres un experto en marketing digital y ventas en redes sociales en Perú.
-    Escribe un post persuasivo y llamativo para Facebook e Instagram vendiendo el siguiente producto:
+    Eres un experto en ventas online en Lima, Perú.
+    Escribe un post de alto impacto comercial para Facebook e Instagram.
 
+    - Contexto: Hoy es {dia_actual}.
+    - Estrategia del día: {angulo}
     - Producto: {producto['nombre']}
-    - Características clave: {producto['detalles']}
-    - Precio referencia: {producto['precio']}
-    - Formato de publicación: {'Video/Reel' if producto['tipo'] == 'video' else 'Foto de producto'}
+    - Detalles técnicos: {producto['detalles']}
+    - Precio/Promoción: {producto['precio']}
 
-    Estructura requerida:
-    1. Gancho inicial potente (emojis y pregunta o beneficio directo).
-    2. 2 o 3 beneficios destacados con viñetas claras.
-    3. Llamado a la acción claro (escribir al DM o al WhatsApp para pedidos contra entrega / envíos).
-    4. 4 a 6 hashtags relevantes (#CargaRapida #LDNIO #AccesoriosCelular #TecnologiaPeru #Lima).
+    Estructura obligatoria:
+    1. Gancho inicial potente adaptado al día ({dia_actual}) y a la estrategia de venta.
+    2. 3 beneficios claros con emojis.
+    3. Precio y promoción destacados.
+    4. Llamado a la acción directo con este enlace exacto:
+       👉 Haz tu pedido por WhatsApp aquí: {link_wsp}
+    5. Métodos de pago y entrega: Yape / Plin / Efectivo. Envíos express a todo Lima y provincias.
+    6. 4 a 5 hashtags relevantes (#CargaRapida #LDNIO #TecnologiaLima #OfertasPeru).
 
-    Mantén el tono directo, confiable y vendedor. No incluyas notas explicativas, solo el texto final listo para publicar.
+    Devuelve solo el texto final listo para publicar, sin explicaciones ni notas.
     """
-    
+
     cliente = genai.Client(api_key=GEMINI_API_KEY)
     respuesta = cliente.models.generate_content(
         model='gemini-3.6-flash',
@@ -70,84 +90,52 @@ def generar_texto_venta(producto):
 
 
 def publicar_en_facebook(producto, texto):
-    """Publica foto o video en la página de Facebook."""
     if not FB_PAGE_ID or not FB_PAGE_ACCESS_TOKEN:
-        print("⚠️ Variables de Facebook no configuradas. Saltando...")
+        print("⚠️ Facebook no configurado.")
         return
 
     archivo = producto["archivo"]
     if not os.path.exists(archivo):
-        print(f"❌ Error: El archivo {archivo} no existe en el repositorio.")
+        print(f"❌ Archivo {archivo} no encontrado.")
         return
 
     if producto["tipo"] == "foto":
-        url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos"
+        url = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/photos"
         with open(archivo, "rb") as f:
-            files = {"source": f}
-            data = {
-                "caption": texto,
-                "access_token": FB_PAGE_ACCESS_TOKEN
-            }
-            res = requests.post(url, files=files, data=data)
-            print(f"📡 Respuesta Facebook Foto: {res.status_code} - {res.text}")
-
-    elif producto["tipo"] == "video":
-        url = f"https://graph-video.facebook.com/v19.0/{FB_PAGE_ID}/videos"
+            res = requests.post(url, files={"source": f}, data={"caption": texto, "access_token": FB_PAGE_ACCESS_TOKEN})
+            print(f"📡 Facebook Foto: {res.status_code}")
+    else:
+        url = f"https://graph-video.facebook.com/v20.0/{FB_PAGE_ID}/videos"
         with open(archivo, "rb") as f:
-            files = {"source": f}
-            data = {
-                "description": texto,
-                "title": producto["nombre"],
-                "access_token": FB_PAGE_ACCESS_TOKEN
-            }
-            res = requests.post(url, files=files, data=data)
-            print(f"📡 Respuesta Facebook Video: {res.status_code} - {res.text}")
+            res = requests.post(url, files={"source": f}, data={"description": texto, "title": producto["nombre"], "access_token": FB_PAGE_ACCESS_TOKEN})
+            print(f"📡 Facebook Video: {res.status_code}")
 
 
 def publicar_en_instagram(producto, texto):
-    """Publica foto o video/Reel en la cuenta de Instagram conectada."""
     if not IG_USER_ID or not FB_PAGE_ACCESS_TOKEN or not GITHUB_REPOSITORY:
-        print("⚠️ Variables de Instagram no configuradas o incompletas. Saltando...")
+        print("⚠️ Instagram no configurado o incompleto.")
         return
 
-    url_media = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/{producto['archivo']}"
-    url_crear = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media"
-    
+    url_media = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/Principal/{producto['archivo']}"
+    url_crear = f"https://graph.facebook.com/v20.0/{IG_USER_ID}/media"
+
     if producto["tipo"] == "foto":
-        payload = {
-            "image_url": url_media,
-            "caption": texto,
-            "access_token": FB_PAGE_ACCESS_TOKEN
-        }
-    else:  # video / reel
-        payload = {
-            "media_type": "REELS",
-            "video_url": url_media,
-            "caption": texto,
-            "access_token": FB_PAGE_ACCESS_TOKEN
-        }
+        payload = {"image_url": url_media, "caption": texto, "access_token": FB_PAGE_ACCESS_TOKEN}
+    else:
+        payload = {"media_type": "REELS", "video_url": url_media, "caption": texto, "access_token": FB_PAGE_ACCESS_TOKEN}
 
-    res_crear = requests.post(url_crear, data=payload)
-    datos_crear = res_crear.json()
-    print(f"📡 Creación contenedor Instagram: {datos_crear}")
+    res_crear = requests.post(url_crear, data=payload).json()
+    creation_id = res_crear.get("id")
 
-    creation_id = datos_crear.get("id")
     if not creation_id:
-        print("❌ No se pudo crear el contenedor en Instagram.")
+        print("❌ Error al crear contenedor Instagram:", res_crear)
         return
 
-    if producto["tipo"] == "video":
-        print("⏳ Procesando video en Instagram (esperando 20 segundos)...")
-        time.sleep(20)
-    else:
-        time.sleep(5)
+    time.sleep(20 if producto["tipo"] == "video" else 5)
 
-    url_publicar = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish"
-    res_publicar = requests.post(url_publicar, data={
-        "creation_id": creation_id,
-        "access_token": FB_PAGE_ACCESS_TOKEN
-    })
-    print(f"📡 Publicación Instagram final: {res_publicar.status_code} - {res_publicar.text}")
+    url_publicar = f"https://graph.facebook.com/v20.0/{IG_USER_ID}/media_publish"
+    res_pub = requests.post(url_publicar, data={"creation_id": creation_id, "access_token": FB_PAGE_ACCESS_TOKEN})
+    print(f"📡 Instagram Final: {res_pub.status_code}")
 
 
 # ==========================================
@@ -155,11 +143,11 @@ def publicar_en_instagram(producto, texto):
 # ==========================================
 if __name__ == "__main__":
     producto_seleccionado = random.choice(CATALOGO)
-    print(f"🎯 Producto elegido hoy: {producto_seleccionado['nombre']} ({producto_seleccionado['tipo']})")
+    print(f"🎯 Producto elegido: {producto_seleccionado['nombre']} ({producto_seleccionado['tipo']})")
 
-    print("🤖 Generando texto publicitario con Gemini...")
+    print("🤖 Generando texto persuasivo...")
     texto_publicacion = generar_texto_venta(producto_seleccionado)
-    print("\n--- Texto Generado ---\n" + texto_publicacion + "\n----------------------\n")
+    print("\n" + texto_publicacion + "\n")
 
     print("🚀 Publicando en Facebook...")
     publicar_en_facebook(producto_seleccionado, texto_publicacion)
