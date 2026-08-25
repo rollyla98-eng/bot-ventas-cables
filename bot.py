@@ -7,9 +7,16 @@ import requests
 from google import genai
 
 # ==========================================
-# 1. CATÁLOGO DE PRODUCTOS
+# 1. CATÁLOGO DE PRODUCTOS (FOTOS Y VIDEOS)
 # ==========================================
 CATALOGO = [
+    {
+        "archivo": "cable tipo c.mp4",
+        "tipo": "video",
+        "nombre": "Cable Tipo C Carga Rápida Ultra Resistente",
+        "detalles": "Efecto de carga turbo veloz, animación de potencia y cable trenzado anti-quiebre.",
+        "precio": "S/ 35 (Promoción: 2 por S/ 60)"
+    },
     {
         "archivo": "cable_65w.jpg",
         "tipo": "foto",
@@ -83,7 +90,7 @@ def generar_texto_venta(producto):
 
     cliente = genai.Client(api_key=GEMINI_API_KEY)
     respuesta = cliente.models.generate_content(
-        model='gemini-3.6-flash',
+        model='gemini-2.5-flash',
         contents=prompt,
     )
     return respuesta.text.strip()
@@ -103,12 +110,12 @@ def publicar_en_facebook(producto, texto):
         url = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/photos"
         with open(archivo, "rb") as f:
             res = requests.post(url, files={"source": f}, data={"caption": texto, "access_token": FB_PAGE_ACCESS_TOKEN})
-            print(f"📡 Facebook Foto: {res.status_code}")
+            print(f"📡 Facebook Foto: {res.status_code} - {res.text}")
     else:
         url = f"https://graph-video.facebook.com/v20.0/{FB_PAGE_ID}/videos"
         with open(archivo, "rb") as f:
             res = requests.post(url, files={"source": f}, data={"description": texto, "title": producto["nombre"], "access_token": FB_PAGE_ACCESS_TOKEN})
-            print(f"📡 Facebook Video: {res.status_code}")
+            print(f"📡 Facebook Video: {res.status_code} - {res.text}")
 
 
 def publicar_en_instagram(producto, texto):
@@ -116,7 +123,9 @@ def publicar_en_instagram(producto, texto):
         print("⚠️ Instagram no configurado o incompleto.")
         return
 
-    url_media = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/Principal/{producto['archivo']}"
+    # Usamos main y quote para soportar nombres con espacios como "cable tipo c.mp4"
+    archivo_codificado = urllib.parse.quote(producto['archivo'])
+    url_media = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/{archivo_codificado}"
     url_crear = f"https://graph.facebook.com/v20.0/{IG_USER_ID}/media"
 
     if producto["tipo"] == "foto":
@@ -135,7 +144,7 @@ def publicar_en_instagram(producto, texto):
 
     url_publicar = f"https://graph.facebook.com/v20.0/{IG_USER_ID}/media_publish"
     res_pub = requests.post(url_publicar, data={"creation_id": creation_id, "access_token": FB_PAGE_ACCESS_TOKEN})
-    print(f"📡 Instagram Final: {res_pub.status_code}")
+    print(f"📡 Instagram Final: {res_pub.status_code} - {res_pub.text}")
 
 
 # ==========================================
@@ -147,7 +156,7 @@ if __name__ == "__main__":
 
     print("🤖 Generando texto persuasivo...")
     texto_publicacion = generar_texto_venta(producto_seleccionado)
-    print("\n" + texto_publicacion + "\n")
+    print("\n--- Texto Generado ---\n" + texto_publicacion + "\n")
 
     print("🚀 Publicando en Facebook...")
     publicar_en_facebook(producto_seleccionado, texto_publicacion)
