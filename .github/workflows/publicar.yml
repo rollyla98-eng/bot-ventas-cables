@@ -1,11 +1,12 @@
 name: Publicar en Facebook e Instagram
 
 on:
-  workflow_dispatch: # Botón para publicar manualmente cuando quieras
+  workflow_dispatch:
   schedule:
-    # 2 publicaciones al día en horarios clave (Hora Perú):
-    - cron: '0 18 * * *' # 1:00 PM (Hora de almuerzo)
-    - cron: '0 1 * * *'  # 8:00 PM (Horario estelar de compras)
+    # 1:15 PM Hora de Perú (18:15 UTC)
+    - cron: '15 18 * * *'
+    # 8:20 PM Hora de Perú (01:20 UTC)
+    - cron: '20 1 * * *'
 
 jobs:
   publicar:
