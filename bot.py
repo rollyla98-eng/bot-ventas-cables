@@ -90,7 +90,7 @@ def generar_texto_venta(producto):
 
     cliente = genai.Client(api_key=GEMINI_API_KEY)
     respuesta = cliente.models.generate_content(
-        model='gemini-2.5-flash',
+        model='gemini-3.6-flash',
         contents=prompt,
     )
     return respuesta.text.strip()
@@ -103,18 +103,26 @@ def publicar_en_facebook(producto, texto):
 
     archivo = producto["archivo"]
     if not os.path.exists(archivo):
-        print(f"❌ Archivo {archivo} no encontrado.")
+        print(f"❌ Archivo local {archivo} no encontrado.")
         return
 
     if producto["tipo"] == "foto":
         url = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/photos"
         with open(archivo, "rb") as f:
-            res = requests.post(url, files={"source": f}, data={"caption": texto, "access_token": FB_PAGE_ACCESS_TOKEN})
+            res = requests.post(
+                url,
+                files={"source": f},
+                data={"caption": texto, "access_token": FB_PAGE_ACCESS_TOKEN}
+            )
             print(f"📡 Facebook Foto: {res.status_code} - {res.text}")
     else:
         url = f"https://graph-video.facebook.com/v20.0/{FB_PAGE_ID}/videos"
         with open(archivo, "rb") as f:
-            res = requests.post(url, files={"source": f}, data={"description": texto, "title": producto["nombre"], "access_token": FB_PAGE_ACCESS_TOKEN})
+            res = requests.post(
+                url,
+                files={"source": f},
+                data={"description": texto, "title": producto["nombre"], "access_token": FB_PAGE_ACCESS_TOKEN}
+            )
             print(f"📡 Facebook Video: {res.status_code} - {res.text}")
 
 
