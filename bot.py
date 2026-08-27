@@ -81,7 +81,7 @@ def generar_texto_venta(producto):
     2. 3 beneficios claros con emojis.
     3. Precio y promoción destacados.
     4. Llamado a la acción directo con este enlace exacto:
-       👉 Haz tu pedido por WhatsApp aquí: {link_wsp}
+        👉 Haz tu pedido por WhatsApp aquí: {link_wsp}
     5. Métodos de pago y entrega: Yape / Plin / Efectivo. Envíos express a todo Lima y provincias.
     6. 4 a 5 hashtags relevantes (#CargaRapida #LDNIO #TecnologiaLima #OfertasPeru).
 
@@ -90,7 +90,7 @@ def generar_texto_venta(producto):
 
     cliente = genai.Client(api_key=GEMINI_API_KEY)
     respuesta = cliente.models.generate_content(
-        model='gemini-3.6-flash',
+        model='gemini-2.5-flash',
         contents=prompt,
     )
     return respuesta.text.strip()
@@ -147,13 +147,17 @@ def publicar_en_instagram(producto, texto):
 
 
 # ==========================================
-# 3. EJECUCIÓN PRINCIPAL
+# 3. EJECUCIÓN PRINCIPAL (ROTACIÓN POR TURNOS)
 # ==========================================
 if __name__ == "__main__":
-    producto_seleccionado = random.choice(CATALOGO)
-    print(f"🎯 Producto elegido: {producto_seleccionado['nombre']} ({producto_seleccionado['tipo']})")
+    ahora = datetime.datetime.now()
+    turno = 1 if ahora.hour >= 16 else 0
+    indice_rotativo = (ahora.timetuple().tm_yday * 2 + turno) % len(CATALOGO)
+    producto_seleccionado = CATALOGO[indice_rotativo]
 
-    print("🤖 Generando texto persuasivo...")
+    print(f"🎯 Producto elegido para este turno: {producto_seleccionado['nombre']} ({producto_seleccionado['tipo']})")
+
+    print("🤖 Generando texto persuasivo con Gemini...")
     texto_publicacion = generar_texto_venta(producto_seleccionado)
     print("\n--- Texto Generado ---\n" + texto_publicacion + "\n")
 
