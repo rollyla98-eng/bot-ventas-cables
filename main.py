@@ -62,8 +62,8 @@ Nunca respondas en inglés.
 
 genai.configure(api_key=GEMINI_API_KEY)
 _MODELOS = [
-    "gemini-3.8-flash",
     "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
     "gemini-flash-latest",
 ]
 
@@ -159,7 +159,7 @@ def generar_respuesta(user_phone: str, user_text: str) -> str:
                 model_name=nombre,
                 system_instruction=SYSTEM_PROMPT,
             )
-            ai_response = modelo.generate_content(prompt)
+            ai_response = modelo.generate_content(prompt, request_options={"timeout": 15})
             texto = (getattr(ai_response, "text", None) or "").strip()
             if texto:
                 print(f"Gemini OK model={nombre}")
