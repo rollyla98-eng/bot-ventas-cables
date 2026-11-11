@@ -1,4 +1,6 @@
 import os
+import threading
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
@@ -32,33 +34,134 @@ if _missing:
         + ". Configúralas en tu hosting o en un archivo .env local (no lo subas a GitHub)."
     )
 
-CATALOGO_TEXTO = """
-Catálogo actual (precios en soles peruanos):
-1) Cable Tipo C Carga Rápida Ultra Resistente — S/ 35 (2 por S/ 60). Trenzado anti-quiebre, carga turbo.
-2) Cable LDNIO 65W Carga Ultra Rápida — S/ 35 (2 por S/ 60). Ideal celulares, tablets y laptops.
-3) Cable LDNIO LS441 TPE Charge & Sync — S/ 25 (2 por S/ 45). Flexible, resistente a tirones.
-4) Cable de Carga Rápida LDNIO Alta Resistencia — S/ 35. Durabilidad y velocidad.
+SHOPIFY_SHOP = os.environ.get("SHOPIFY_SHOP", "0hh7zs-bw.myshopify.com")
+SHOPIFY_CLIENT_ID = os.environ.get("SHOPIFY_CLIENT_ID")
+SHOPIFY_CLIENT_SECRET = os.environ.get("SHOPIFY_CLIENT_SECRET")
+_SHOPIFY_API = "2025-01"
+_CATALOGO_TTL = 300  # segundos de caché del catálogo
+_lock = threading.Lock()
+_shop_token = {"value": None, "exp": 0.0}
+_catalogo_cache = {"text": None, "ts": 0.0}
 
+INFO_TIENDA = """
 Pagos: Yape / Plin / Efectivo.
 Envíos: express Lima y provincias.
 Para cerrar pedido, pide nombre, distrito/ciudad, producto y cantidad.
 """
 
-SYSTEM_PROMPT = f"""
-Eres el asesor de ventas por WhatsApp de una tienda en Lima, Perú, especializada en cables LDNIO de carga rápida.
-Siempre responde en español peruano, claro y corto (2 a 5 oraciones). Sé amable, confiado y orientado a cerrar la venta.
-No inventes productos ni precios fuera del catálogo.
-Si preguntan por stock, asume disponible salvo que digan lo contrario.
+
+def _shopify_token() -> str:
+    now = time.time()
+    if _shop_token["value"] and now < _shop_token["exp"] - 300:
+        return _shop_token["value"]
+    res = requests.post(
+        f"https://{SHOPIFY_SHOP}/admin/oauth/access_token",
+        data={
+            "grant_type": "client_credentials",
+            "client_id": SHOPIFY_CLIENT_ID,
+            "client_secret": SHOPIFY_CLIENT_SECRET,
+        },
+        timeout=15,
+    )
+    res.raise_for_status()
+    body = res.json()
+    _shop_token["value"] = body["access_token"]
+    _shop_token["exp"] = now + float(body.get("expires_in") or 3600)
+    return _shop_token["value"]
+
+
+_QUERY_PRODUCTOS = """
+{
+  products(first: 50, query: "status:active") {
+    nodes {
+      title
+      description
+      variants(first: 20) {
+        nodes { title price inventoryQuantity }
+      }
+    }
+  }
+}
+"""
+
+
+def _leer_catalogo_shopify() -> str:
+    res = requests.post(
+        f"https://{SHOPIFY_SHOP}/admin/api/{_SHOPIFY_API}/graphql.json",
+        json={"query": _QUERY_PRODUCTOS},
+        headers={"X-Shopify-Access-Token": _shopify_token()},
+        timeout=15,
+    )
+    res.raise_for_status()
+    data = res.json()
+    if data.get("errors"):
+        raise RuntimeError(f"Shopify errors: {data['errors']}")
+    lineas = []
+    for n, p in enumerate(data["data"]["products"]["nodes"], start=1):
+        desc = " ".join((p.get("description") or "").split())[:200]
+        lineas.append(f"{n}) {p['title']}" + (f" — {desc}" if desc else ""))
+        for v in p["variants"]["nodes"]:
+            stock = v.get("inventoryQuantity")
+            if stock is None:
+                estado = "stock no confirmado"
+            elif stock > 0:
+                estado = f"{stock} en stock"
+            else:
+                estado = "AGOTADO"
+            nombre_v = v["title"] if v["title"] != "Default Title" else "Única"
+            lineas.append(f"   - Variante {nombre_v}: S/ {v['price']} ({estado})")
+    if not lineas:
+        return "Catálogo: no hay productos activos en la tienda ahora mismo."
+    return "Catálogo en vivo de la tienda (precios en soles peruanos):\n" + "\n".join(lineas)
+
+
+def obtener_catalogo():
+    """Catálogo en vivo con caché. None si Shopify no responde y no hay copia reciente."""
+    with _lock:
+        now = time.time()
+        if _catalogo_cache["text"] and now - _catalogo_cache["ts"] < _CATALOGO_TTL:
+            return _catalogo_cache["text"]
+        try:
+            texto = _leer_catalogo_shopify()
+            _catalogo_cache["text"] = texto
+            _catalogo_cache["ts"] = now
+            print(f"Shopify catalogo OK chars={len(texto)}", flush=True)
+            return texto
+        except Exception as e:
+            print(f"Error Shopify: {e}", flush=True)
+            if _catalogo_cache["text"] and now - _catalogo_cache["ts"] < 3600:
+                return _catalogo_cache["text"]
+            return None
+
+
+def construir_system_prompt() -> str:
+    catalogo = obtener_catalogo()
+    if catalogo:
+        bloque = (
+            catalogo
+            + "\nUsa SOLO estos productos, precios y stock. Si una variante está AGOTADA, dilo y ofrece otra."
+        )
+    else:
+        bloque = (
+            "AVISO: ahora mismo no se pudo consultar el catálogo de la tienda. "
+            "NO des ningún precio ni confirmes stock. Si preguntan precio o stock, di con amabilidad "
+            "que en este momento no puedes confirmar el precio y que en unos minutos le confirmas."
+        )
+    return f"""
+Eres el asesor de ventas por WhatsApp de una tienda en Lima, Perú, que vende cables LDNIO de carga rápida.
+Siempre responde en español peruano, claro y corto (2 a 5 oraciones). Sé amable, natural y orientado a cerrar la venta.
+No inventes productos, precios, promociones ni stock fuera del catálogo.
 Si mandan saludos, responde breve y ofrece ayuda para elegir cable.
-Si dudan entre modelos, recomienda según uso: celular diario → Tipo C o LS441; laptop/carga fuerte → 65W; combo → 2 unidades en promo.
-Siempre que encaje, cierra con una pregunta (¿para celular o laptop? ¿uno o el combo?).
-Métodos de pago y entrega: Yape / Plin / Efectivo. Envíos express a Lima y provincias.
+Si piden algo que no vendemos (por ejemplo un celular), aclara con amabilidad que solo vendemos cables y ofrece el que le sirva.
+Siempre que encaje, cierra con una pregunta.
 Número de pedidos (si lo piden): +{WHATSAPP_PEDIDOS}
 No menciones que eres una IA ni hables de APIs o código.
 Nunca respondas en inglés.
 
-{CATALOGO_TEXTO}
+{bloque}
+{INFO_TIENDA}
 """.strip()
+
 
 genai.configure(api_key=GEMINI_API_KEY)
 _MODELOS = [
@@ -134,7 +237,7 @@ def procesar_webhook(data: dict) -> None:
                         send_whatsapp_message(
                             user_phone,
                             "Por ahora respondo mejor por texto 😊 "
-                            "¿Buscas cable Tipo C, 65W o el LS441? Te ayudo a elegir.",
+                            "Cuéntame qué cable buscas y te ayudo a elegir.",
                         )
     except Exception as e:
         print(f"Error webhook: {e}")
@@ -152,12 +255,13 @@ def generar_respuesta(user_phone: str, user_text: str) -> str:
         + "\n\nResponde solo el mensaje para el cliente en español, sin prefijos."
     )
 
+    system_prompt = construir_system_prompt()
     last_err = None
     for nombre in _MODELOS:
         try:
             modelo = genai.GenerativeModel(
                 model_name=nombre,
-                system_instruction=SYSTEM_PROMPT,
+                system_instruction=system_prompt,
             )
             ai_response = modelo.generate_content(prompt, request_options={"timeout": 15})
             texto = (getattr(ai_response, "text", None) or "").strip()
@@ -173,7 +277,7 @@ def generar_respuesta(user_phone: str, user_text: str) -> str:
     print(f"Gemini all models failed: {last_err}")
     texto = (
         "¡Hola! Vendemos cables LDNIO de carga rápida. "
-        "¿Lo necesitas para celular o laptop? Tenemos Tipo C, 65W y LS441."
+        "En este momento no puedo confirmarte precios, dame unos minutos y te respondo."
     )
     historial.append(f"Asesor: {texto}")
     historial[:] = historial[-_MAX_TURNOS:]
