@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Autorización de TikTok — ARO Tech API</title>
+  <meta name="description" content="Página de redirección de TikTok. Muestra el código de autorización para copiarlo y enviárselo al asistente.">
+  <meta name="robots" content="index,follow">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <div class="wrap header-inner">
+      <a class="brand" href="/">
+        <span class="mark">A</span>
+        <span>
+          <div class="brand-name">ARO</div>
+          <div class="brand-sub">ARO Tech API</div>
+        </span>
+      </a>
+      <nav aria-label="Principal">
+        <a href="/">Inicio</a>
+        <a href="/terms/">Términos</a>
+        <a href="/privacy/">Privacidad</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap">
+
+    <h1>Autorización de TikTok</h1>
+    <p class="lede">Esta página recibe la respuesta de TikTok después de autorizar ARO Tech API.</p>
+
+    <div id="success" class="card hidden">
+      <div class="notice">
+        <strong>Copia este código y envíaselo a tu asistente.</strong>
+        <p>No lo publiques ni lo compartas con nadie más. Sirve solo para terminar la conexión de tu cuenta.</p>
+      </div>
+      <div class="param">
+        <div class="param-label">Código (code)</div>
+        <div class="param-box">
+          <code id="code-value"></code>
+          <button type="button" class="copy" data-copy="code-value">Copiar</button>
+        </div>
+      </div>
+      <div class="param hidden" id="state-wrap">
+        <div class="param-label">Estado (state)</div>
+        <div class="param-box">
+          <code id="state-value"></code>
+          <button type="button" class="copy" data-copy="state-value">Copiar</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="error" class="card hidden error-box">
+      <h2>TikTok devolvió un error</h2>
+      <div class="param">
+        <div class="param-label">Error</div>
+        <div class="param-box"><code id="error-value"></code><button type="button" class="copy" data-copy="error-value">Copiar</button></div>
+      </div>
+      <div class="param hidden" id="error-desc-wrap">
+        <div class="param-label">Descripción (error_description)</div>
+        <div class="param-box"><code id="error-desc-value"></code><button type="button" class="copy" data-copy="error-desc-value">Copiar</button></div>
+      </div>
+      <p>Puedes copiar este mensaje y enviárselo a tu asistente.</p>
+    </div>
+
+    <div id="empty" class="card hidden">
+      <p>No hay un código ni un error en esta dirección. Si estabas autorizando la aplicación, vuelve a abrir el enlace de TikTok o pide uno nuevo a tu asistente.</p>
+    </div>
+
+    <section class="en" lang="en">
+      <div class="lang-label">English</div>
+      <p>This is the TikTok OAuth redirect page. If a code appears above, copy it and send it to your assistant. The code stays in your browser and is not stored on this website.</p>
+    </section>
+
+    <script>
+      (function () {
+        const params = new URLSearchParams(window.location.search);
+        const code = params.get("code");
+        const state = params.get("state");
+        const error = params.get("error");
+        const errorDescription = params.get("error_description");
+
+        const show = (id) => document.getElementById(id).classList.remove("hidden");
+        const setText = (id, value) => { document.getElementById(id).textContent = value; };
+
+        if (error) {
+          show("error");
+          setText("error-value", error);
+          if (errorDescription) {
+            show("error-desc-wrap");
+            setText("error-desc-value", errorDescription);
+          }
+        } else if (code) {
+          show("success");
+          setText("code-value", code);
+          if (state) {
+            show("state-wrap");
+            setText("state-value", state);
+          }
+        } else {
+          show("empty");
+        }
+
+        document.querySelectorAll("button.copy").forEach((button) => {
+          button.addEventListener("click", async () => {
+            const target = document.getElementById(button.getAttribute("data-copy"));
+            const text = target ? target.textContent : "";
+            try {
+              await navigator.clipboard.writeText(text);
+              button.textContent = "Copiado";
+            } catch (err) {
+              const range = document.createRange();
+              range.selectNodeContents(target);
+              const selection = window.getSelection();
+              selection.removeAllRanges();
+              selection.addRange(range);
+              button.textContent = "Seleccionado";
+            }
+            setTimeout(() => { button.textContent = "Copiar"; }, 2000);
+          });
+        });
+      })();
+    </script>
+
+  </main>
+  <footer>
+    <div class="wrap">
+      <p>ARO — Rolly Arnulfo López Aro, Perú.</p>
+      <p>Contacto: <a href="mailto:rc1vjzcc@mail.grokbot.com">rc1vjzcc@mail.grokbot.com</a></p>
+      <p><a href="/">Inicio</a> · <a href="/terms/">Términos de servicio</a> · <a href="/privacy/">Política de privacidad</a></p>
+    </div>
+  </footer>
+</body>
+</html>
