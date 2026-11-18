@@ -17,3 +17,37 @@ services:
         sync: false
       - key: WHATSAPP_PEDIDOS
         value: "51910371606"
+      - key: GEMINI_MODEL
+        sync: false
+      - key: MODO_PRUEBA_NUMEROS
+        sync: false
+      - key: SILENCIO_DUENO_HORAS
+        sync: false
+      - key: PANEL_COPY_URL
+        sync: false
+      - key: PANEL_VIDEO_URL
+        sync: false
+      - key: PANEL_INFO_URL
+        sync: false
+      - key: PAGO_METODO
+        sync: false
+      - key: PAGO_TITULAR
+        sync: false
+      - key: PAGO_NUMERO
+        sync: false
+      - key: PAGO_QR_URL
+        sync: false
+      - key: PAGO_QR_MEDIA_ID
+        sync: false
+      - key: PAGO_DESTINATARIO_CLAVES
+        sync: false
+      - key: PAGO_VENTANA_MIN
+        sync: false
+      - key: SHEET_INGRESOS_ID
+        sync: false
+      - key: SHEET_INGRESOS_RANGO
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: NOTIFICAR_A
+        sync: false

@@ -1,12 +1,17 @@
 import os
+import re
 import threading
 import time
 import traceback
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from fastapi import FastAPI, BackgroundTasks, Request, Response, Query
-import google.generativeai as genai
+from google import genai
+from google.genai import types
+
+import venta_panel
 
 app = FastAPI()
 _executor = ThreadPoolExecutor(max_workers=4)
@@ -16,6 +21,19 @@ PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 WHATSAPP_PEDIDOS = os.environ.get("WHATSAPP_PEDIDOS", "51910371606")
+GRAPH_API_VERSION = os.environ.get("GRAPH_API_VERSION", "v20.0")
+# Modelo de Gemini configurable; los de respaldo se prueban si el principal falla.
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
+GEMINI_MODELS_FALLBACK = [
+    m.strip()
+    for m in os.environ.get("GEMINI_MODELS_FALLBACK", "gemini-3.5-flash,gemini-2.5-flash").split(",")
+    if m.strip()
+]
+
+# Filtro de prueba: si tiene valor, el bot SOLO responde a esos números.
+MODO_PRUEBA_NUMEROS = os.environ.get("MODO_PRUEBA_NUMEROS", "").strip()
+# Horas de silencio en un chat cuando Rolly escribe desde la app Business.
+SILENCIO_DUENO_HORAS = float(os.environ.get("SILENCIO_DUENO_HORAS", "4"))
 
 _missing = [
     n
@@ -43,13 +61,150 @@ _lock = threading.Lock()
 _shop_token = {"value": None, "exp": 0.0}
 _catalogo_cache = {"text": None, "ts": 0.0}
 
-INFO_TIENDA = """
-Pagos: Yape / Plin / Efectivo.
-Envíos: express Lima y provincias.
-Para cerrar pedido, pide nombre, distrito/ciudad, producto y cantidad.
-"""
+# ---------------------------------------------------------------------------
+# Filtros de ventas / silencio / prueba (funciones testables)
+# ---------------------------------------------------------------------------
+# Palabras/frases que califican un chat como ventas (substrings, sin acentos).
+_KEYWORDS_VENTA = (
+    "panel",
+    "panel financiero",
+    "cable",
+    "cables",
+    "precio",
+    "precios",
+    "comprar",
+    "compra",
+    "yape",
+    "plin",
+    "tiktok",
+    "shopify",
+)
 
 
+def normalizar_telefono(numero: str | None) -> str:
+    """Quita +, espacios, guiones y deja solo dígitos."""
+    if not numero:
+        return ""
+    return re.sub(r"\D", "", str(numero))
+
+
+def _sin_acentos(s: str) -> str:
+    s = unicodedata.normalize("NFKD", s or "")
+    return "".join(c for c in s if not unicodedata.combining(c)).lower()
+
+
+def es_mensaje_venta(texto: str | None, message_obj: dict | None = None) -> bool:
+    """True si el texto menciona keywords de ventas o el mensaje trae referral de anuncio."""
+    if message_obj and message_obj.get("referral"):
+        return True
+    t = _sin_acentos(texto or "")
+    if not t:
+        return False
+    # "PANEL" CTA de TikTok ya queda cubierto por substring "panel"
+    return any(k in t for k in _KEYWORDS_VENTA)
+
+
+def numeros_prueba() -> set[str]:
+    """Set de teléfonos normalizados de MODO_PRUEBA_NUMEROS (vacío = sin restricción)."""
+    raw = MODO_PRUEBA_NUMEROS
+    if not raw:
+        return set()
+    return {normalizar_telefono(p) for p in raw.split(",") if normalizar_telefono(p)}
+
+
+def en_modo_prueba(telefono: str) -> bool:
+    """
+    Si MODO_PRUEBA_NUMEROS tiene valor, True solo si el teléfono está en la lista.
+    Si está vacío/ausente, True para cualquiera (no hay restricción de prueba).
+    """
+    permitidos = numeros_prueba()
+    if not permitidos:
+        return True
+    return normalizar_telefono(telefono) in permitidos
+
+
+def es_mensaje_grupo(message_obj: dict | None, value: dict | None = None) -> bool:
+    """Heurística: ignora grupos. Cloud API 1:1 no trae group_id; si aparece, skip."""
+    if not message_obj:
+        return False
+    if message_obj.get("group_id"):
+        return True
+    # Algunos payloads usan from con sufijo @g.us (estilo on-prem / legacy)
+    frm = str(message_obj.get("from") or "")
+    if "@g.us" in frm or frm.endswith("-group"):
+        return True
+    ctx = message_obj.get("context") or {}
+    if ctx.get("group_id") or ctx.get("from_me") and "@g.us" in str(ctx.get("id") or ""):
+        return True
+    # Si contacts/metadata indican conversación de grupo
+    if value and (value.get("group_id") or value.get("metadata", {}).get("group_id")):
+        return True
+    return False
+
+
+# Memoria en proceso (se pierde al dormir el free plan de Render).
+_chats_venta: dict[str, float] = {}  # teléfono normalizado → timestamp de activación
+_silencio_dueno: dict[str, float] = {}  # teléfono del cliente → hasta cuándo (epoch)
+_historial: dict[str, list[str]] = {}
+_MAX_TURNOS = 8
+_seen_ids: set[str] = set()
+
+
+def chat_en_modo_venta(telefono: str) -> bool:
+    return normalizar_telefono(telefono) in _chats_venta
+
+
+def activar_modo_venta(telefono: str) -> None:
+    with _lock:
+        _chats_venta[normalizar_telefono(telefono)] = time.time()
+
+
+def marcar_silencio_dueno(telefono_cliente: str, horas: float | None = None) -> None:
+    """Cuando Rolly escribe desde la app, el bot se calla en ese chat N horas."""
+    h = SILENCIO_DUENO_HORAS if horas is None else horas
+    with _lock:
+        _silencio_dueno[normalizar_telefono(telefono_cliente)] = time.time() + max(0.0, h) * 3600
+
+
+def chat_en_silencio(telefono: str) -> bool:
+    tel = normalizar_telefono(telefono)
+    hasta = _silencio_dueno.get(tel)
+    if hasta is None:
+        return False
+    if time.time() >= hasta:
+        with _lock:
+            _silencio_dueno.pop(tel, None)
+        return False
+    return True
+
+
+def debe_responder(
+    telefono: str,
+    texto: str | None = None,
+    message_obj: dict | None = None,
+    value: dict | None = None,
+) -> tuple[bool, str]:
+    """
+    Decide si el bot contesta. Devuelve (ok, motivo_log).
+    Orden: grupo → silencio dueño → modo prueba → modo venta / keywords.
+    """
+    if es_mensaje_grupo(message_obj, value):
+        return False, "grupo"
+    if chat_en_silencio(telefono):
+        return False, "silencio_dueno"
+    if not en_modo_prueba(telefono):
+        return False, "fuera_modo_prueba"
+    if chat_en_modo_venta(telefono):
+        return True, "modo_venta"
+    if es_mensaje_venta(texto, message_obj):
+        activar_modo_venta(telefono)
+        return True, "activar_venta"
+    return False, "no_es_venta"
+
+
+# ---------------------------------------------------------------------------
+# Shopify (se conserva por si se reactiva cables; NO se usa en el prompt actual)
+# ---------------------------------------------------------------------------
 def _shopify_token() -> str:
     now = time.time()
     if _shop_token["value"] and now < _shop_token["exp"] - 300:
@@ -116,7 +271,9 @@ def _leer_catalogo_shopify() -> str:
 
 
 def obtener_catalogo():
-    """Catálogo en vivo con caché. None si Shopify no responde y no hay copia reciente."""
+    """Catálogo en vivo con caché. None si Shopify no responde y no hay copia reciente.
+    Conservado por compatibilidad; el prompt actual del Panel NO lo usa.
+    """
     with _lock:
         now = time.time()
         if _catalogo_cache["text"] and now - _catalogo_cache["ts"] < _CATALOGO_TTL:
@@ -135,44 +292,25 @@ def obtener_catalogo():
 
 
 def construir_system_prompt() -> str:
-    catalogo = obtener_catalogo()
-    if catalogo:
-        bloque = (
-            catalogo
-            + "\nUsa SOLO estos productos, precios y stock. Si una variante está AGOTADA, dilo y ofrece otra."
-        )
-    else:
-        bloque = (
-            "AVISO: ahora mismo no se pudo consultar el catálogo de la tienda. "
-            "NO des ningún precio ni confirmes stock. Si preguntan precio o stock, di con amabilidad "
-            "que en este momento no puedes confirmar el precio y que en unos minutos le confirmas."
-        )
+    """Prompt centrado en el Panel Financiero. Sin catálogo de cables."""
     return f"""
-Eres el asesor de ventas por WhatsApp de una tienda en Lima, Perú, que vende cables LDNIO de carga rápida.
-Siempre responde en español peruano, claro y corto (2 a 5 oraciones). Sé amable, natural y orientado a cerrar la venta.
-No inventes productos, precios, promociones ni stock fuera del catálogo.
-Si mandan saludos, responde breve y ofrece ayuda para elegir cable.
-Si piden algo que no vendemos (por ejemplo un celular), aclara con amabilidad que solo vendemos cables y ofrece el que le sirva.
+Eres el asesor de ventas por WhatsApp de Aro Control (Lima, Perú).
+Tu producto activo es el {venta_panel.PANEL_NOMBRE} a S/ {venta_panel.PANEL_PRECIO:.2f}.
+Responde siempre en español peruano, claro y corto (2 a 5 oraciones). Sé amable, natural y orientado a cerrar la venta.
+No inventes precios, funciones ni beneficios fuera de la información oficial.
+Si preguntan por cables u otros productos físicos, di con amabilidad que por ahora no hay cables disponibles y ofrece el {venta_panel.PANEL_NOMBRE}.
+Si mandan saludos dentro de un chat de ventas, responde breve y ofrece ayuda con el Panel.
 Siempre que encaje, cierra con una pregunta.
-Número de pedidos (si lo piden): +{WHATSAPP_PEDIDOS}
+Número de contacto (si lo piden): +{WHATSAPP_PEDIDOS}
 No menciones que eres una IA ni hables de APIs o código.
 Nunca respondas en inglés.
 
-{bloque}
-{INFO_TIENDA}
+{venta_panel.bloque_prompt_panel()}
 """.strip()
 
 
-genai.configure(api_key=GEMINI_API_KEY)
-_MODELOS = [
-    "gemini-3.5-flash-lite",
-    "gemini-3.8-flash",
-    "gemini-flash-latest",
-]
-
-_historial: dict[str, list[str]] = {}
-_MAX_TURNOS = 8
-_seen_ids: set[str] = set()
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+_MODELOS = [GEMINI_MODEL] + [m for m in GEMINI_MODELS_FALLBACK if m != GEMINI_MODEL]
 
 
 @app.get("/")
@@ -201,6 +339,21 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
     return {"status": "ok"}
 
 
+def _procesar_ecos_dueno(value: dict) -> None:
+    """smb_message_echoes: Rolly escribió desde la app → silenciar ese chat."""
+    ecos = value.get("smb_message_echoes") or []
+    if not ecos:
+        return
+    for eco in ecos:
+        # En coexistencia, "to" es el cliente al que Rolly le escribió.
+        destino = eco.get("to") or (eco.get("recipient_id"))
+        if not destino:
+            # Fallback: algunos payloads ponen el peer en context o contacts
+            continue
+        marcar_silencio_dueno(destino)
+        print(f"Silencio dueño chat={normalizar_telefono(destino)} horas={SILENCIO_DUENO_HORAS}", flush=True)
+
+
 def procesar_webhook(data: dict) -> None:
     try:
         for entry in data.get("entry", []):
@@ -208,6 +361,11 @@ def procesar_webhook(data: dict) -> None:
                 value = change.get("value", {})
                 if value.get("statuses"):
                     print(f"Webhook status update count={len(value.get('statuses') or [])}")
+
+                # Ecos de mensajes que Rolly manda desde la app Business (NO son inbound).
+                _procesar_ecos_dueno(value)
+
+                # Solo messages entrantes; nunca tratar smb_message_echoes como mensajes.
                 messages = value.get("messages") or []
                 print(f"Webhook messages count={len(messages)}")
                 for message_obj in messages:
@@ -230,14 +388,47 @@ def procesar_webhook(data: dict) -> None:
                         user_text = (message_obj.get("text") or {}).get("body", "").strip()
                         if not user_text:
                             continue
-                        print(f"Inbound text={user_text[:80]}")
+                        ok, motivo = debe_responder(user_phone, user_text, message_obj, value)
+                        if not ok:
+                            print(f"Silencio total from={user_phone} motivo={motivo} text={user_text[:60]}", flush=True)
+                            continue
+                        print(f"Inbound text={user_text[:80]} filtro={motivo}")
                         reply = generar_respuesta(user_phone, user_text)
-                        send_whatsapp_message(user_phone, reply)
+                        enviar_pago = venta_panel.MARCADOR_PAGO in reply
+                        reply = reply.replace(venta_panel.MARCADOR_PAGO, "").strip()
+                        if reply:
+                            send_whatsapp_message(user_phone, reply)
+                        if enviar_pago:
+                            venta_panel.enviar_instrucciones_pago(_WA, user_phone)
+
+                    elif msg_type == "image":
+                        caption = (message_obj.get("image") or {}).get("caption") or ""
+                        ok, motivo = debe_responder(user_phone, caption, message_obj, value)
+                        # Imagen sin modo venta y sin caption de ventas → silencio total
+                        if not ok:
+                            print(f"Silencio imagen from={user_phone} motivo={motivo}", flush=True)
+                            continue
+                        media_id = (message_obj.get("image") or {}).get("id")
+                        tratado = media_id and venta_panel.procesar_imagen(
+                            _WA, gemini_client, _MODELOS, user_phone, media_id
+                        )
+                        if not tratado:
+                            send_whatsapp_message(
+                                user_phone,
+                                "Recibí tu imagen 😊 Si es tu comprobante del Panel, asegúrate de que se vean "
+                                "monto, fecha, hora y destinatario.",
+                            )
+
                     else:
+                        # audio, sticker, etc.
+                        ok, motivo = debe_responder(user_phone, None, message_obj, value)
+                        if not ok:
+                            print(f"Silencio tipo={msg_type} from={user_phone} motivo={motivo}", flush=True)
+                            continue
                         send_whatsapp_message(
                             user_phone,
                             "Por ahora respondo mejor por texto 😊 "
-                            "Cuéntame qué cable buscas y te ayudo a elegir.",
+                            "Cuéntame qué duda tienes del Panel Financiero y te ayudo.",
                         )
     except Exception as e:
         print(f"Error webhook: {e}")
@@ -259,12 +450,15 @@ def generar_respuesta(user_phone: str, user_text: str) -> str:
     last_err = None
     for nombre in _MODELOS:
         try:
-            modelo = genai.GenerativeModel(
-                model_name=nombre,
-                system_instruction=system_prompt,
+            ai_response = gemini_client.models.generate_content(
+                model=nombre,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    http_options=types.HttpOptions(timeout=15000),
+                ),
             )
-            ai_response = modelo.generate_content(prompt, request_options={"timeout": 15})
-            texto = (getattr(ai_response, "text", None) or "").strip()
+            texto = (ai_response.text or "").strip()
             if texto:
                 print(f"Gemini OK model={nombre}")
                 historial.append(f"Asesor: {texto}")
@@ -276,30 +470,68 @@ def generar_respuesta(user_phone: str, user_text: str) -> str:
 
     print(f"Gemini all models failed: {last_err}")
     texto = (
-        "¡Hola! Vendemos cables LDNIO de carga rápida. "
-        "En este momento no puedo confirmarte precios, dame unos minutos y te respondo."
+        "Dame un momento, ya te respondo 🙏 "
+        f"Si buscas el {venta_panel.PANEL_NOMBRE}, en breve te ayudo."
     )
     historial.append(f"Asesor: {texto}")
     historial[:] = historial[-_MAX_TURNOS:]
     return texto
 
 
-def send_whatsapp_message(to: str, message: str) -> None:
-    url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json",
-    }
+def _graph(path: str) -> str:
+    return f"https://graph.facebook.com/{GRAPH_API_VERSION}/{path}"
+
+
+def _wa_headers() -> dict:
+    return {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+
+
+def _wa_post(to: str, tipo: str, cuerpo: dict) -> None:
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
         "to": to,
-        "type": "text",
-        "text": {"body": message[:4000]},
+        "type": tipo,
+        tipo: cuerpo,
     }
     try:
-        res = requests.post(url, json=payload, headers=headers, timeout=30)
-        print(f"WhatsApp send status={res.status_code} body={res.text[:400]}")
+        res = requests.post(_graph(f"{PHONE_NUMBER_ID}/messages"), json=payload, headers=_wa_headers(), timeout=30)
+        print(f"WhatsApp send type={tipo} status={res.status_code} body={res.text[:400]}")
     except Exception as e:
         print(f"WhatsApp send exception: {e}")
         traceback.print_exc()
+
+
+def send_whatsapp_message(to: str, message: str, preview_url: bool = False) -> None:
+    cuerpo = {"body": message[:4000]}
+    if preview_url:
+        cuerpo["preview_url"] = True
+    _wa_post(to, "text", cuerpo)
+
+
+def send_whatsapp_image(to: str, link: str | None = None, media_id: str | None = None, caption: str = "") -> None:
+    imagen = {"id": media_id} if media_id else {"link": link}
+    if caption:
+        imagen["caption"] = caption[:1024]
+    _wa_post(to, "image", imagen)
+
+
+def download_whatsapp_media(media_id: str) -> tuple[bytes, str]:
+    auth = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    meta = requests.get(_graph(media_id), headers=auth, timeout=15)
+    meta.raise_for_status()
+    info = meta.json()
+    archivo = requests.get(info["url"], headers=auth, timeout=30)
+    archivo.raise_for_status()
+    return archivo.content, info.get("mime_type") or "image/jpeg"
+
+
+class _WhatsApp:
+    """Adaptador que usa venta_panel para enviar y descargar."""
+
+    send_text = staticmethod(send_whatsapp_message)
+    send_image = staticmethod(send_whatsapp_image)
+    download_media = staticmethod(download_whatsapp_media)
+
+
+_WA = _WhatsApp()

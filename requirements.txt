@@ -1,4 +1,6 @@
 fastapi
 uvicorn[standard]
 requests
-google-generativeai
+google-genai>=1.0
+google-auth>=2.0
+tzdata
