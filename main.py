@@ -291,21 +291,21 @@ def obtener_catalogo():
             return None
 
 
-def construir_system_prompt() -> str:
-    """Prompt centrado en el Panel Financiero. Sin catálogo de cables."""
+def construir_system_prompt(user_phone: str = "") -> str:
+    """Prompt: Panel Financiero con plan Gratis (con límites) y plan Pro (sin límites + Asesor IA). Sin cables."""
     return f"""
-Eres el asesor de ventas por WhatsApp de Aro Control (Lima, Perú).
-Tu producto activo es el {venta_panel.PANEL_NOMBRE} a S/ {venta_panel.PANEL_PRECIO:.2f}.
-Responde siempre en español peruano, claro y corto (2 a 5 oraciones). Sé amable, natural y orientado a cerrar la venta.
+Eres el asesor por WhatsApp de Aro Control (Lima, Perú).
+Producto activo: el {venta_panel.PANEL_NOMBRE}, con plan Gratis (con límites) y plan {venta_panel.PRO_NOMBRE} ({venta_panel.texto_planes()}, sin límites y con Asesor IA). Las cuentas nuevas empiezan con {venta_panel.PRO_PRUEBA_DIAS} días de {venta_panel.PRO_NOMBRE} gratis.
+Responde siempre en español peruano, claro y corto (2 a 5 oraciones). Sé amable y natural.
 No inventes precios, funciones ni beneficios fuera de la información oficial.
 Si preguntan por cables u otros productos físicos, di con amabilidad que por ahora no hay cables disponibles y ofrece el {venta_panel.PANEL_NOMBRE}.
 Si mandan saludos dentro de un chat de ventas, responde breve y ofrece ayuda con el Panel.
 Siempre que encaje, cierra con una pregunta.
 Número de contacto (si lo piden): +{WHATSAPP_PEDIDOS}
-No menciones que eres una IA ni hables de APIs o código.
+No hables de APIs ni de código.
 Nunca respondas en inglés.
 
-{venta_panel.bloque_prompt_panel()}
+{venta_panel.bloque_prompt_panel(user_phone)}
 """.strip()
 
 
@@ -394,12 +394,8 @@ def procesar_webhook(data: dict) -> None:
                             continue
                         print(f"Inbound text={user_text[:80]} filtro={motivo}")
                         reply = generar_respuesta(user_phone, user_text)
-                        enviar_pago = venta_panel.MARCADOR_PAGO in reply
-                        reply = reply.replace(venta_panel.MARCADOR_PAGO, "").strip()
-                        if reply:
-                            send_whatsapp_message(user_phone, reply)
-                        if enviar_pago:
-                            venta_panel.enviar_instrucciones_pago(_WA, user_phone)
+                        # Marcadores (entrega del panel + prueba Pro, pago) y corte del Asesor IA si no hay Pro vigente.
+                        venta_panel.procesar_respuesta(_WA, user_phone, reply)
 
                     elif msg_type == "image":
                         caption = (message_obj.get("image") or {}).get("caption") or ""
@@ -415,7 +411,7 @@ def procesar_webhook(data: dict) -> None:
                         if not tratado:
                             send_whatsapp_message(
                                 user_phone,
-                                "Recibí tu imagen 😊 Si es tu comprobante del Panel, asegúrate de que se vean "
+                                "Recibí tu imagen 😊 Si es tu comprobante de pago del plan Pro, asegúrate de que se vean "
                                 "monto, fecha, hora y destinatario.",
                             )
 
@@ -446,7 +442,7 @@ def generar_respuesta(user_phone: str, user_text: str) -> str:
         + "\n\nResponde solo el mensaje para el cliente en español, sin prefijos."
     )
 
-    system_prompt = construir_system_prompt()
+    system_prompt = construir_system_prompt(user_phone)
     last_err = None
     for nombre in _MODELOS:
         try:
@@ -461,7 +457,10 @@ def generar_respuesta(user_phone: str, user_text: str) -> str:
             texto = (ai_response.text or "").strip()
             if texto:
                 print(f"Gemini OK model={nombre}")
-                historial.append(f"Asesor: {texto}")
+                limpio = texto
+                for m in venta_panel.MARCADORES:
+                    limpio = limpio.replace(m, "")
+                historial.append(f"Asesor: {limpio.strip()}")
                 historial[:] = historial[-_MAX_TURNOS:]
                 return texto
         except Exception as e:

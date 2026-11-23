@@ -29,6 +29,20 @@ services:
         sync: false
       - key: PANEL_INFO_URL
         sync: false
+      - key: PRO_PRUEBA_DIAS
+        sync: false
+      - key: PRO_PRECIO_MENSUAL
+        sync: false
+      - key: PRO_PRECIO_ANUAL
+        sync: false
+      - key: PRO_DIAS_MENSUAL
+        sync: false
+      - key: PRO_DIAS_ANUAL
+        sync: false
+      - key: PLAN_GRATIS_MOVIMIENTOS
+        sync: false
+      - key: PLAN_GRATIS_FIADOS
+        sync: false
       - key: PAGO_METODO
         sync: false
       - key: PAGO_TITULAR
