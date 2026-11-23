@@ -7,23 +7,27 @@ Modelo de negocio:
   historial completo, reportes, exportación y Asesor IA (este asistente por WhatsApp).
 - Cuentas nuevas: PRO_PRUEBA_DIAS días de Pro gratis desde que se entrega el Panel (= se crea la cuenta);
   después pasan a Gratis sin perder datos.
-- Los límites del plan Gratis viven en la plantilla de Google Sheets; el bot solo los comunica.
+- Los límites del plan Gratis los aplica el Panel (la app); el bot solo los comunica.
 
 Flujo:
 1) Gemini responde con la info de panel_financiero.md (o PANEL_INFO_URL) y emite marcadores:
    [[ENVIAR_PANEL]]     → se envían enlace /copy + video sin cobrar y arranca la prueba de Pro.
-   [[ENVIAR_PAGO_PRO]]  → se envían el QR y las instrucciones de pago de Pro.
+   [[ENVIAR_PAGO_PRO]]  → se envían el QR y las instrucciones de pago de Pro (y el link de Mercado Pago si hay token).
+   [[ENVIAR_LINK_MP]]   → se envía el link de pago con tarjeta (Checkout Pro). Si falta el token, se cae al QR.
    [[ASESOR_IA]]        → la respuesta es del Asesor IA (función Pro); si el cliente no tiene Pro vigente
-                          el código la reemplaza por la oferta de Pro con el QR.
+                          el código la reemplaza por la oferta de Pro con el QR (y el link de tarjeta si hay token).
 2) Si el cliente manda una imagen, Gemini Vision lee el comprobante y el código exige: monto exacto
    PRO_PRECIO_MENSUAL (pro_mensual) o PRO_PRECIO_ANUAL (pro_anual), fecha de hoy en Lima, hora dentro de
    PAGO_VENTANA_MIN, destinatario con PAGO_DESTINATARIO_CLAVES y confianza >= 0.8. Sin duplicados.
 3) Pago válido: pro_mensual = +PRO_DIAS_MENSUAL días, pro_anual = +PRO_DIAS_ANUAL días, desde hoy o desde
-   el vencimiento si Pro aún está vigente. Se registra en la hoja y se avisa a Rolly.
+   el vencimiento si Pro aún está vigente. Se guarda en Firestore (ARO Finance Pro) y se avisa a Rolly.
+   La hoja de ingresos queda como respaldo opcional si está configurada.
 
-Planes guardados: prueba_pro, gratis, pro_mensual, pro_anual.
-Estado: memoria del proceso + hoja (se relee de la hoja tras un reinicio).
-Toda la configuración va por variables de entorno. Aquí no hay claves.
+Planes guardados en el bot: prueba_pro, gratis, pro_mensual, pro_anual.
+En la app (users/{uid}.subscription) eso es trial / monthly / annual (status active|trial|expired).
+Estado: memoria del proceso + Firestore (se relee al arrancar o al primer mensaje).
+Si faltan FIREBASE_SERVICE_ACCOUNT_JSON y FIREBASE_PROJECT_ID, el estado queda solo en memoria
+(y en la hoja, si está configurada). Toda la configuración va por variables de entorno. Aquí no hay claves.
 """
 
 import base64
@@ -46,8 +50,10 @@ import requests
 TZ = ZoneInfo(os.environ.get("ZONA_HORARIA", "America/Lima"))
 PANEL_NOMBRE = os.environ.get("PANEL_NOMBRE", "Panel Financiero")
 PANEL_INFO_URL = os.environ.get("PANEL_INFO_URL", "").strip()
+PANEL_APP_URL = os.environ.get("PANEL_APP_URL", "").strip()
 PANEL_COPY_URL = os.environ.get("PANEL_COPY_URL", "").strip()
 PANEL_VIDEO_URL = os.environ.get("PANEL_VIDEO_URL", "").strip()
+PANEL_APP_DEFAULT = "https://aro-finance-pro.web.app"
 
 PRO_NOMBRE = os.environ.get("PRO_NOMBRE", "Pro")
 PRO_PRECIO_MENSUAL = float(os.environ.get("PRO_PRECIO_MENSUAL", "19"))
@@ -55,7 +61,7 @@ PRO_PRECIO_ANUAL = float(os.environ.get("PRO_PRECIO_ANUAL", "149"))
 PRO_PRUEBA_DIAS = int(os.environ.get("PRO_PRUEBA_DIAS", "15"))
 PRO_DIAS_MENSUAL = int(os.environ.get("PRO_DIAS_MENSUAL", "30"))
 PRO_DIAS_ANUAL = int(os.environ.get("PRO_DIAS_ANUAL", "365"))
-# Límites del plan Gratis (viven en la plantilla; el bot solo los comunica).
+# Límites del plan Gratis (viven en la app; el bot solo los comunica).
 PLAN_GRATIS_MOVIMIENTOS = int(os.environ.get("PLAN_GRATIS_MOVIMIENTOS", "30"))
 PLAN_GRATIS_FIADOS = int(os.environ.get("PLAN_GRATIS_FIADOS", "3"))
 
@@ -83,8 +89,9 @@ NOTIFICAR_A = os.environ.get("NOTIFICAR_A", "").strip()  # opcional: número de 
 
 MARCADOR_PANEL = "[[ENVIAR_PANEL]]"
 MARCADOR_PAGO = "[[ENVIAR_PAGO_PRO]]"
+MARCADOR_LINK_MP = "[[ENVIAR_LINK_MP]]"
 MARCADOR_ASESOR = "[[ASESOR_IA]]"
-MARCADORES = (MARCADOR_PANEL, MARCADOR_PAGO, MARCADOR_ASESOR)
+MARCADORES = (MARCADOR_PANEL, MARCADOR_PAGO, MARCADOR_LINK_MP, MARCADOR_ASESOR)
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _lock = threading.RLock()
@@ -122,6 +129,11 @@ def _fecha_txt(iso: str) -> str:
         return datetime.strptime(iso, "%Y-%m-%d").strftime("%d/%m/%Y")
     except Exception:
         return iso or "?"
+
+
+def url_panel() -> str:
+    """Link real del Panel (app web). Nunca se promete un envío a mano."""
+    return PANEL_APP_URL or PANEL_COPY_URL or PANEL_APP_DEFAULT
 
 
 def texto_planes() -> str:
@@ -200,30 +212,37 @@ def bloque_estado(telefono: str) -> str:
     if e["plan"] == "gratis":
         return (f"Estado del cliente: está en el plan Gratis (su {PRO_NOMBRE} terminó el "
                 f"{_fecha_txt(e['vencimiento'])}). Responde dudas del Panel y de venta. NO respondas como Asesor IA "
-                f"ni ayudes con funciones Pro; ofrécele {PRO_NOMBRE} ({texto_planes()}) y, si acepta, escribe {MARCADOR_PAGO}.")
-    return (f"Estado del cliente: aún no tiene el {PANEL_NOMBRE}. NO respondas como Asesor IA; ofrécele el "
-            f"{PANEL_NOMBRE} (empieza con {PRO_PRUEBA_DIAS} días de {PRO_NOMBRE} gratis).")
+                f"ni ayudes con funciones Pro. Si pide pagar o se habla de precio, {PRO_NOMBRE} cuesta {texto_planes()} "
+                f"y, si acepta, escribe {MARCADOR_PAGO}.")
+    return (f"Estado del cliente: aún no tiene el {PANEL_NOMBRE}. NO respondas como Asesor IA. "
+            f"Si habla de plata, gastos, fiados, deudas, negocio o precio (o pide el Panel), "
+            f"ofrécele el {PANEL_NOMBRE} gratis (empieza con {PRO_PRUEBA_DIAS} días de {PRO_NOMBRE}); "
+            f"si no, solo responde lo que preguntó.")
 
 
 def bloque_prompt_panel(telefono: str = "") -> str:
     return f"""
-Producto activo: el {PANEL_NOMBRE} (Aro Control), plantilla automatizada en Google Sheets.
+Producto activo: el {PANEL_NOMBRE} (Aro Control / ARO Finance Pro), app web en {url_panel()}.
 Planes (explícalos con exactitud, sin cambiar números):
 {texto_modelo()}
-El {PANEL_NOMBRE} se entrega sin cobrar (enlace para hacer la copia + video tutorial). Al entregarlo empieza su
+El {PANEL_NOMBRE} se entrega sin cobrar (el enlace de la app; el video tutorial solo si el sistema lo envía). Al entregarlo empieza su
 prueba de {PRO_NOMBRE}. NO digas que todo el panel es gratis ni que es ilimitado sin pagar: tiene un plan Gratis con límites y un plan {PRO_NOMBRE} de pago.
-Información oficial (usa SOLO esto; si preguntan algo que no está aquí, di que un asesor lo confirma pronto;
-no inventes funciones, beneficios ni precios):
+NO lo presentes como una hoja de cálculo. NO prometas que un asesor enviará el Panel, el video ni nada que no puedas cumplir.
+Información oficial (usa SOLO esto; si preguntan algo que no está aquí, dilo con honestidad y no inventes):
 ---
 {info_panel()}
 ---
-Pago de {PRO_NOMBRE}: {PAGO_METODO} a nombre de {PAGO_TITULAR}. El QR oficial acepta Plin y Yape.
+Pago de {PRO_NOMBRE}: Plin/Yape con QR o tarjeta con Mercado Pago.
+El QR oficial acepta Plin y Yape, a nombre de {PAGO_TITULAR}.
+También se puede pagar con tarjeta (débito o crédito) por Mercado Pago; el sistema envía el link (no lo escribas tú).
 Montos exactos: {_soles(PRO_PRECIO_MENSUAL)} (mensual) o {_soles(PRO_PRECIO_ANUAL)} (anual). No inventes otros montos.
-Si preguntan por cables u otros productos físicos, di con amabilidad que por ahora no hay cables disponibles
-y ofrece el {PANEL_NOMBRE}.
+Si preguntan por cables u otros productos físicos, di con amabilidad que por ahora no hay cables disponibles.
+No ofrezcas el {PANEL_NOMBRE} en ese momento salvo que la persona hable de plata, gastos o lo pida.
 Marcadores (escríbelos al final, cada uno en una línea aparte, tal cual; el sistema los reemplaza):
 - Si el cliente quiere el {PANEL_NOMBRE} (o empezar su prueba de {PRO_NOMBRE}): {MARCADOR_PANEL} (no escribas tú los enlaces).
-- Si el cliente quiere pagar {PRO_NOMBRE}: {MARCADOR_PAGO} (no escribas tú los datos de pago).
+- Si el cliente quiere pagar {PRO_NOMBRE}: {MARCADOR_PAGO} (no escribas tú los datos de pago ni los links).
+- Si el cliente pide pagar solo con tarjeta o Mercado Pago: {MARCADOR_LINK_MP} (no escribas tú el link).
+  Si ya eligió mensual o anual, usa {MARCADOR_LINK_MP}:pro_mensual o {MARCADOR_LINK_MP}:pro_anual.
 - Si tu respuesta es del Asesor IA (consejo de finanzas personales, análisis o ayuda con funciones {PRO_NOMBRE}
   como historial, reportes o exportación), empieza con {MARCADOR_ASESOR}. Las dudas de venta o de cómo es el
   {PANEL_NOMBRE} y sus planes NO llevan ese marcador.
@@ -235,8 +254,8 @@ Marcadores (escríbelos al final, cada uno en una línea aparte, tal cual; el si
 # 2) Entrega del Panel (sin cobrar) = creación de la cuenta → arranca la prueba de Pro
 # ---------------------------------------------------------------------------
 def entregar_panel(wa, telefono: str) -> bool:
-    """Envía el enlace /copy y el video sin cobrar y arranca la prueba de Pro (una vez por número).
-    Devuelve True si se entregó directo."""
+    """Envía el enlace de la app (y el video solo si hay PANEL_VIDEO_URL) y arranca la prueba de Pro (una vez por número).
+    Devuelve True si se entregó."""
     tel = _tel(telefono)
     venc = iniciar_prueba_pro(tel)  # None si ya tenía cuenta
     if venc:
@@ -246,17 +265,18 @@ def entregar_panel(wa, telefono: str) -> bool:
     else:
         e = estado_plan(tel)
         txt_plan = (f"Tu plan actual: {e['plan']}" + (f" (vence el {_fecha_txt(e['vencimiento'])})." if e["pro"] else "."))
-    if not (PANEL_COPY_URL and PANEL_VIDEO_URL):
-        wa.send_text(telefono, f"¡Listo! 🙌 En breve un asesor te envía tu {PANEL_NOMBRE} y el video tutorial. {txt_plan}")
-        notificar(wa, f"📎 +{tel} pidió el {PANEL_NOMBRE} pero faltan PANEL_COPY_URL/PANEL_VIDEO_URL: enviar a mano.")
-        if venc:
-            registrar_fila(tel, f"{PANEL_NOMBRE} (cuenta nueva)", 0, estado="pendiente-entrega", plan="prueba_pro",
-                           inicio_prueba=_hoy().isoformat(), vencimiento=venc)
-        return False
-    wa.send_text(telefono, f"¡Aquí tienes tu {PANEL_NOMBRE}! 🎁\n\n"
-                           f"1) Haz tu copia de la plantilla aquí:\n{PANEL_COPY_URL}", preview_url=True)
-    wa.send_text(telefono, f"2) Mira el video tutorial para empezar:\n{PANEL_VIDEO_URL}", preview_url=True)
+    link = url_panel()
+    wa.send_text(telefono, f"¡Aquí tienes tu {PANEL_NOMBRE}! 🎁\n"
+                           f"Entra aquí (es gratis y tienes {PRO_PRUEBA_DIAS} días de {PRO_NOMBRE}):\n{link}",
+                 preview_url=True)
+    if PANEL_VIDEO_URL:
+        wa.send_text(telefono, f"Mira el video para empezar:\n{PANEL_VIDEO_URL}", preview_url=True)
     wa.send_text(telefono, txt_plan)
+    try:
+        import conversacion as _cv
+        _cv.marcar_oferta(tel, stage="prueba" if venc else "ofrecido")
+    except Exception:
+        pass
     if venc:
         ok = registrar_fila(tel, f"{PANEL_NOMBRE} (cuenta nueva)", 0, estado="entregado", plan="prueba_pro",
                             inicio_prueba=_hoy().isoformat(), vencimiento=venc)
@@ -265,12 +285,24 @@ def entregar_panel(wa, telefono: str) -> bool:
     return True
 
 
+
 # ---------------------------------------------------------------------------
 # 3) Estado del plan (prueba_pro / gratis / pro_mensual / pro_anual)
 # ---------------------------------------------------------------------------
 def _cargar_de_hoja(tel: str) -> dict:
-    """Última fila de la hoja con plan/vencimiento para ese teléfono."""
+    """Estado persistido: Firestore primero, hoja de ingresos como respaldo."""
     sub = {"plan": None, "inicio_prueba": "", "vencimiento": ""}
+    try:
+        import venta_firestore as vf
+        fs = vf.cargar_estado(tel)
+        if fs.get("plan") or fs.get("inicio_prueba"):
+            return {
+                "plan": fs.get("plan"),
+                "inicio_prueba": fs.get("inicio_prueba") or "",
+                "vencimiento": fs.get("vencimiento") or "",
+            }
+    except Exception as e:
+        print(f"Error leyendo Firestore: {e}", flush=True)
     for fila in _leer_filas():
         fila = list(fila) + [""] * (13 - len(fila))
         if _tel(fila[4]) != tel:
@@ -314,27 +346,44 @@ def iniciar_prueba_pro(telefono: str) -> str | None:
         hoy = _hoy()
         venc = (hoy + timedelta(days=PRO_PRUEBA_DIAS)).isoformat()
         _suscripciones[tel] = {"plan": "prueba_pro", "inicio_prueba": hoy.isoformat(), "vencimiento": venc}
-        return venc
+    try:
+        import venta_firestore as vf
+        vf.registrar_prueba(tel, hoy.isoformat(), venc)
+    except Exception as e:
+        print(f"Error guardando prueba Pro en Firestore: {e}", flush=True)
+    return venc
 
 
 def _pasar_a_gratis(wa, tel: str) -> None:
-    """Anota una vez en la hoja que el cliente pasó a Gratis (sus datos siguen en su plantilla)."""
+    """Anota una vez en la hoja que el cliente pasó a Gratis (sus datos siguen en el Panel)."""
     with _lock:
         guardado = _suscripciones.get(tel) or {}
         if guardado.get("plan") not in PLANES_PRO:
             return
         venc = guardado.get("vencimiento", "")
         _suscripciones[tel] = {"plan": "gratis", "inicio_prueba": guardado.get("inicio_prueba", ""), "vencimiento": venc}
+    try:
+        import venta_firestore as vf
+        vf.guardar_estado(tel, "gratis", guardado.get("inicio_prueba", ""), venc)
+    except Exception as e:
+        print(f"Error guardando paso a Gratis en Firestore: {e}", flush=True)
     registrar_fila(tel, f"{PANEL_NOMBRE} (pasa a Gratis)", 0, estado="paso-a-gratis", plan="gratis",
                    inicio_prueba=guardado.get("inicio_prueba", ""), vencimiento=venc)
     notificar(wa, f"⏸️ +{tel} pasó al plan Gratis (su {PRO_NOMBRE} terminó el {_fecha_txt(venc)}).")
 
 
 def mensaje_ofrecer_pro() -> str:
+    try:
+        import mercado_pago as _mp
+        con_tarjeta = _mp.mp_disponible()
+    except Exception:
+        con_tarjeta = False
+    cierre = ("Te envío el QR de Plin/Yape y el link para pagar con tarjeta. 🙌"
+              if con_tarjeta else "Te envío el QR para pagar. 🙌")
     return (f"El Asesor IA y las funciones avanzadas son parte del plan {PRO_NOMBRE} ⭐ Ahora estás en el plan Gratis "
             f"(hasta {PLAN_GRATIS_MOVIMIENTOS} movimientos al mes y {PLAN_GRATIS_FIADOS} fiados activos; tus datos siguen ahí). "
             f"Con {PRO_NOMBRE} tienes todo ilimitado, historial, reportes, exportación y Asesor IA por {texto_planes()}. "
-            f"Te envío el QR para pagar. 🙌")
+            f"{cierre}")
 
 
 def mensaje_ofrecer_panel() -> str:
@@ -354,6 +403,21 @@ def aplicar_pago(tel: str, plan: str) -> str:
     return venc
 
 
+def activar_pro(telefono: str, plan: str) -> str:
+    """Hook de almacenamiento: activa o extiende Pro (mismos días que el flujo QR).
+    La capa Firestore se escribe en registrar_pago. Se puede sustituir esta función."""
+    return aplicar_pago(_tel(telefono), plan)
+
+
+def pago_id_ya_registrado(payment_id: str, metodo: str = "mercadopago") -> bool:
+    """True si ese id de pago ya se usó para activar Pro."""
+    pid = str(payment_id or "").strip()
+    if not pid:
+        return False
+    clave = f"mp:{pid}" if metodo == "mercadopago" else pid
+    return ya_registrado(clave)
+
+
 def procesar_respuesta(wa, telefono: str, reply: str) -> None:
     """Aplica los marcadores de Gemini y el corte del Asesor IA, y envía la respuesta."""
     tel = _tel(telefono)
@@ -361,6 +425,7 @@ def procesar_respuesta(wa, telefono: str, reply: str) -> None:
     texto = reply
     for m in MARCADORES:
         texto = texto.replace(m, "")
+    texto = re.sub(r"\[\[ENVIAR_LINK_MP(?::[a-z_]+)?\]\]", "", texto)
     texto = texto.strip()
 
     e = estado_plan(tel)
@@ -380,8 +445,8 @@ def procesar_respuesta(wa, telefono: str, reply: str) -> None:
         wa.send_text(telefono, texto)
     if flags[MARCADOR_PANEL]:
         entregar_panel(wa, telefono)
-    if flags[MARCADOR_PAGO]:
-        enviar_instrucciones_pago(wa, telefono)
+    if flags[MARCADOR_PAGO] or flags.get(MARCADOR_LINK_MP):
+        _enviar_pago_pro(wa, telefono, reply, solo_tarjeta=flags.get(MARCADOR_LINK_MP) and not flags[MARCADOR_PAGO])
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +470,26 @@ def enviar_instrucciones_pago(wa, to: str) -> None:
         wa.send_image(to, link=PAGO_QR_URL or None, media_id=PAGO_QR_MEDIA_ID or None,
                       caption=f"QR Plin/Yape – {PAGO_TITULAR}")
     wa.send_text(to, texto_instrucciones_pago())
+
+
+def _enviar_pago_pro(wa, telefono: str, reply: str = "", solo_tarjeta: bool = False) -> None:
+    """Ofrece QR (flujo actual) y, si hay token, el link de Mercado Pago.
+    Si el cliente pidió solo tarjeta y no hay token, se cae al QR en silencio."""
+    plan = None
+    try:
+        import mercado_pago as _mp
+        plan = _mp.plan_desde_texto(reply)
+        con_mp = _mp.mp_disponible()
+    except Exception:
+        _mp = None
+        con_mp = False
+    if solo_tarjeta and con_mp:
+        if not _mp.enviar_links_mp(wa, telefono, plan=plan):
+            enviar_instrucciones_pago(wa, telefono)
+        return
+    enviar_instrucciones_pago(wa, telefono)
+    if con_mp:
+        _mp.enviar_links_mp(wa, telefono, plan=plan)
 
 # ---------------------------------------------------------------------------
 # 5) Validación del comprobante con Gemini Vision
@@ -562,6 +647,13 @@ def _leer_filas() -> list[list[str]]:
 def ya_registrado(clave: str) -> bool:
     if clave in _entregados:
         return True
+    try:
+        import venta_firestore as vf
+        if vf.pago_ya_registrado(clave):
+            _entregados.add(clave)
+            return True
+    except Exception as e:
+        print(f"Error buscando duplicado en Firestore: {e}", flush=True)
     for fila in _leer_filas():
         if clave in fila:
             _entregados.add(clave)
@@ -569,8 +661,72 @@ def ya_registrado(clave: str) -> bool:
     return False
 
 
+def registrar_pago(telefono: str, plan: str, monto: float, metodo: str = "",
+                   payment_id: str = "", clave: str = "", datos: dict | None = None,
+                   vencimiento: str = "", inicio_prueba: str = "",
+                   receipt_ok: bool = True, wamid: str = "") -> dict:
+    """Hook único de registro: Firestore (pagos + subscription) y hoja de respaldo.
+    El QR y Mercado Pago pasan por aquí. Firestore puede ampliarse sin cambiar a los llamadores.
+    Devuelve {ok, cuenta_app, fs_on, hoja, uid}."""
+    tel = _tel(telefono)
+    datos = dict(datos or {})
+    if not clave:
+        clave = f"mp:{payment_id}" if (metodo == "mercadopago" and payment_id) else (payment_id or "")
+    if clave:
+        with _lock:
+            _entregados.add(clave)
+    inicio = inicio_prueba or estado_plan(tel)["inicio_prueba"]
+    fs = {"ok": False, "cuenta_app": False, "uid": ""}
+    fs_on = False
+    try:
+        import venta_firestore as vf
+        fs = vf.registrar_pago(
+            tel, plan, monto, inicio, vencimiento,
+            clave=clave, wamid=wamid, datos=datos, receipt_ok=receipt_ok,
+            metodo=metodo, payment_id=str(payment_id or ""),
+        )
+        fs_on = vf.configurado()
+    except Exception as e:
+        print(f"Error guardando pago en Firestore: {e}", flush=True)
+    nombre_plan = "anual" if plan == "pro_anual" else "mensual"
+    hoja = registrar_fila(
+        tel,
+        f"{PANEL_NOMBRE} {PRO_NOMBRE} ({nombre_plan})",
+        monto,
+        estado="pagado",
+        datos=datos,
+        clave=clave,
+        plan=plan,
+        inicio_prueba=inicio,
+        vencimiento=vencimiento,
+        metodo=metodo,
+    )
+    return {
+        "ok": bool(fs.get("ok") or hoja),
+        "cuenta_app": bool(fs.get("cuenta_app")),
+        "fs_on": fs_on,
+        "hoja": bool(hoja),
+        "uid": fs.get("uid") or "",
+    }
+
+
+def aviso_falta_cuenta_app(wa, telefono: str, res: dict) -> str:
+    """Si el pago quedó en el bot pero no hay cuenta de la app, pide el correo. Texto extra para Rolly."""
+    if res.get("fs_on") and res.get("ok") and not res.get("cuenta_app"):
+        wa.send_text(
+            telefono,
+            "Tu pago quedó registrado. Para activar el Pro en ARO Finance Pro, respóndeme el correo "
+            "con el que te registraste en https://aro-finance-pro.web.app 🙌",
+        )
+        return " (OJO: no hay cuenta de la app vinculada a este WhatsApp; pide el correo de registro)"
+    if not res.get("fs_on"):
+        return " (OJO: Firestore no configurado; el Pro en la app se activa cuando esté la clave)"
+    return ""
+
+
 def registrar_fila(telefono: str, producto: str, monto: float, estado: str, datos: dict | None = None,
-                   clave: str = "", plan: str = "", inicio_prueba: str = "", vencimiento: str = "") -> bool:
+                   clave: str = "", plan: str = "", inicio_prueba: str = "", vencimiento: str = "",
+                   metodo: str = "") -> bool:
     s = _sesion_sheets()
     if not s:
         print(f"Hoja de ingresos no configurada; fila no registrada ({estado}). Estado solo en memoria.", flush=True)
@@ -580,7 +736,7 @@ def registrar_fila(telefono: str, producto: str, monto: float, estado: str, dato
         _ahora().strftime("%Y-%m-%d %H:%M:%S"),
         producto,
         f"{monto:.2f}",
-        PAGO_METODO if monto else "sin cobro",
+        metodo or (PAGO_METODO if monto else "sin cobro"),
         _tel(telefono),
         datos.get("destinatario") or "",
         datos.get("numero_operacion") or "",
@@ -645,15 +801,17 @@ def procesar_imagen(wa, gemini_client, modelos: list[str], telefono: str, media_
 
     monto = PRO_PRECIO_ANUAL if plan == "pro_anual" else PRO_PRECIO_MENSUAL
     inicio = estado_plan(tel)["inicio_prueba"]
-    venc = aplicar_pago(tel, plan)
+    venc = activar_pro(tel, plan)
     nombre_plan = "anual" if plan == "pro_anual" else "mensual"
     wa.send_text(telefono, f"¡Pago validado! ✅ Tu plan {PRO_NOMBRE} {nombre_plan} está activo hasta el "
                            f"{_fecha_txt(venc)}: movimientos y fiados ilimitados, historial, reportes, exportación "
                            f"y Asesor IA. ¡Gracias! 🙌")
-    ok = registrar_fila(tel, f"{PANEL_NOMBRE} {PRO_NOMBRE} ({nombre_plan})", monto, estado="pagado", datos=datos,
-                        clave=clave, plan=plan, inicio_prueba=inicio, vencimiento=venc)
+    res = registrar_pago(tel, plan, monto, metodo=PAGO_METODO, clave=clave, datos=datos,
+                         vencimiento=venc, inicio_prueba=inicio, receipt_ok=True)
+    aviso_fs = aviso_falta_cuenta_app(wa, telefono, res)
     notificar(wa, f"✅ Pago {PRO_NOMBRE} {nombre_plan} {_soles(monto)} validado de +{tel}; vence {_fecha_txt(venc)}."
-                  + ("" if ok else " (OJO: no se pudo registrar en la hoja; solo en memoria)"))
+                  + ("" if res.get("hoja") else " (OJO: no se pudo registrar en la hoja; solo en memoria)")
+                  + aviso_fs)
     return True
 
 
@@ -663,3 +821,46 @@ def notificar(wa, texto: str) -> None:
             wa.send_text(NOTIFICAR_A, texto)
         except Exception:
             traceback.print_exc()
+
+
+def extraer_correo(texto: str) -> str:
+    import venta_firestore as vf
+    return vf.extraer_correo(texto)
+
+
+def es_solo_correo(texto: str) -> bool:
+    import venta_firestore as vf
+    return vf.es_solo_correo(texto)
+
+
+def procesar_posible_correo(wa, telefono: str, texto: str) -> bool:
+    """Si el mensaje trae un correo, lo vincula a la cuenta de la app.
+    Si el texto es solo el correo, responde y devuelve True (no pasar por Gemini)."""
+    import venta_firestore as vf
+    email = vf.extraer_correo(texto or "")
+    if not email or not vf.configurado():
+        return False
+    res = vf.vincular_correo(telefono, email)
+    solo = vf.es_solo_correo(texto or "")
+    if not solo:
+        return False
+    tel = _tel(telefono)
+    if res.get("cuenta_app") and res.get("plan") in PLANES_PRO:
+        wa.send_text(telefono, f"Listo, vinculé tu correo {email} con este WhatsApp. "
+                               f"Tu plan {PRO_NOMBRE} ya está activo en ARO Finance Pro"
+                               + (f" hasta el {_fecha_txt(res.get('vencimiento') or '')}." if res.get("vencimiento") else ".")
+                               + " Entra a https://aro-finance-pro.web.app y recarga la página. 🙌")
+        notificar(wa, f"🔗 +{tel} vinculó {email} (uid={res.get('uid') or 'sí'}); plan {res.get('plan')}.")
+    elif res.get("uid"):
+        wa.send_text(telefono, f"Encontré tu cuenta de ARO Finance Pro con {email}. "
+                               "Cuando se active un plan desde este WhatsApp, también se verá en la app.")
+        notificar(wa, f"🔗 +{tel} vinculó {email} (cuenta encontrada, sin plan pendiente).")
+    else:
+        wa.send_text(telefono, f"Guardé tu correo {email}. No encontré aún una cuenta con ese correo en ARO Finance Pro. "
+                               "Cuando te registres en https://aro-finance-pro.web.app, escríbeme de nuevo este correo "
+                               "para activar tu plan en la app. 🙌")
+        notificar(wa, f"🔗 +{tel} envió {email}, pero no hay cuenta en la app con ese correo.")
+    # refrescar memoria por si se aplicó un plan
+    with _lock:
+        _suscripciones.pop(tel, None)
+    return True

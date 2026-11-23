@@ -4,3 +4,4 @@ requests
 google-genai>=1.0
 google-auth>=2.0
 tzdata
+firebase-admin>=6.0

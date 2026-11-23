@@ -29,6 +29,18 @@ services:
         sync: false
       - key: PANEL_INFO_URL
         sync: false
+      - key: PANEL_APP_URL
+        sync: false
+      - key: SEGUIMIENTO_ACTIVO
+        sync: false
+      - key: WA_TEMPLATE_SEGUIMIENTO
+        sync: false
+      - key: WA_TEMPLATE_FIN_PRUEBA
+        sync: false
+      - key: WA_TEMPLATE_LANG
+        sync: false
+      - key: CRON_SECRETO
+        sync: false
       - key: PRO_PRUEBA_DIAS
         sync: false
       - key: PRO_PRECIO_MENSUAL
@@ -56,6 +68,16 @@ services:
       - key: PAGO_DESTINATARIO_CLAVES
         sync: false
       - key: PAGO_VENTANA_MIN
+        sync: false
+      - key: MP_ACCESS_TOKEN
+        sync: false
+      - key: MP_WEBHOOK_SECRET
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
         sync: false
       - key: SHEET_INGRESOS_ID
         sync: false

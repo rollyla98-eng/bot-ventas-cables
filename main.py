@@ -11,6 +11,8 @@ from fastapi import FastAPI, BackgroundTasks, Request, Response, Query
 from google import genai
 from google.genai import types
 
+import conversacion
+import mercado_pago
 import venta_panel
 
 app = FastAPI()
@@ -76,6 +78,9 @@ _KEYWORDS_VENTA = (
     "compra",
     "yape",
     "plin",
+    "tarjeta",
+    "mercado pago",
+    "mercadopago",
     "tiktok",
     "shopify",
 )
@@ -146,7 +151,7 @@ def es_mensaje_grupo(message_obj: dict | None, value: dict | None = None) -> boo
 _chats_venta: dict[str, float] = {}  # teléfono normalizado → timestamp de activación
 _silencio_dueno: dict[str, float] = {}  # teléfono del cliente → hasta cuándo (epoch)
 _historial: dict[str, list[str]] = {}
-_MAX_TURNOS = 8
+_MAX_TURNOS = 20
 _seen_ids: set[str] = set()
 
 
@@ -291,19 +296,19 @@ def obtener_catalogo():
             return None
 
 
-def construir_system_prompt(user_phone: str = "") -> str:
+def construir_system_prompt(user_phone: str = "", user_text: str = "") -> str:
     """Prompt: Panel Financiero con plan Gratis (con límites) y plan Pro (sin límites + Asesor IA). Sin cables."""
     return f"""
 Eres el asesor por WhatsApp de Aro Control (Lima, Perú).
-Producto activo: el {venta_panel.PANEL_NOMBRE}, con plan Gratis (con límites) y plan {venta_panel.PRO_NOMBRE} ({venta_panel.texto_planes()}, sin límites y con Asesor IA). Las cuentas nuevas empiezan con {venta_panel.PRO_PRUEBA_DIAS} días de {venta_panel.PRO_NOMBRE} gratis.
-Responde siempre en español peruano, claro y corto (2 a 5 oraciones). Sé amable y natural.
+Producto activo: el {venta_panel.PANEL_NOMBRE} (app web {venta_panel.url_panel()}), con plan Gratis (con límites) y plan {venta_panel.PRO_NOMBRE} ({venta_panel.texto_planes()}, sin límites y con Asesor IA). Las cuentas nuevas empiezan con {venta_panel.PRO_PRUEBA_DIAS} días de {venta_panel.PRO_NOMBRE} gratis.
+Responde siempre en español peruano, natural y corto: 2 o 3 líneas, una sola pregunta al final.
 No inventes precios, funciones ni beneficios fuera de la información oficial.
-Si preguntan por cables u otros productos físicos, di con amabilidad que por ahora no hay cables disponibles y ofrece el {venta_panel.PANEL_NOMBRE}.
-Si mandan saludos dentro de un chat de ventas, responde breve y ofrece ayuda con el Panel.
-Siempre que encaje, cierra con una pregunta.
+Si preguntan por cables u otros productos físicos, di con amabilidad que por ahora no hay cables disponibles. No ofrezcas el Panel salvo que hablen de plata o lo pidan.
 Número de contacto (si lo piden): +{WHATSAPP_PEDIDOS}
 No hables de APIs ni de código.
 Nunca respondas en inglés.
+
+{conversacion.bloque_reglas(user_phone, user_text)}
 
 {venta_panel.bloque_prompt_panel(user_phone)}
 """.strip()
@@ -316,6 +321,23 @@ _MODELOS = [GEMINI_MODEL] + [m for m in GEMINI_MODELS_FALLBACK if m != GEMINI_MO
 @app.get("/")
 def home():
     return {"status": "Servidor activo", "bot": "ventas-whatsapp"}
+
+
+@app.post("/cron/seguimiento")
+async def cron_seguimiento(request: Request):
+    """Dispara los seguimientos. No envía nada si SEGUIMIENTO_ACTIVO=0 (por defecto)."""
+    secreto = (os.environ.get("CRON_SECRETO") or "").strip()
+    if secreto:
+        enviado = (request.headers.get("x-cron-secret") or request.query_params.get("secret") or "")
+        if enviado != secreto:
+            return Response(content="no autorizado", status_code=401)
+    if not conversacion.seguimiento_activo():
+        return {"status": "off"}
+    hechos = conversacion.procesar_seguimientos(
+        en_modo_prueba=en_modo_prueba,
+        chat_en_silencio=chat_en_silencio,
+    )
+    return {"status": "ok", "enviados": len(hechos)}
 
 
 @app.get("/webhook")
@@ -339,7 +361,32 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
     return {"status": "ok"}
 
 
+@app.get("/mp/webhook")
+def mp_webhook_ping():
+    return {"status": "ok"}
+
+
+@app.post("/mp/webhook")
+async def mp_webhook(request: Request, background_tasks: BackgroundTasks):
+    """Notificaciones de Mercado Pago. Responde 200 al toque y procesa en segundo plano.
+    Si hay MP_WEBHOOK_SECRET y la firma no calza, responde 401 y no activa nada."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    query = {k: v for k, v in request.query_params.items()}
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    if mercado_pago.webhook_secret() and not mercado_pago.firma_valida(body, headers, query):
+        print("MP webhook firma inválida", flush=True)
+        return Response(content="firma inválida", status_code=401)
+    background_tasks.add_task(mercado_pago.procesar_notificacion, body, query)
+    return {"status": "ok"}
+
+
 def _procesar_ecos_dueno(value: dict) -> None:
+
     """smb_message_echoes: Rolly escribió desde la app → silenciar ese chat."""
     ecos = value.get("smb_message_echoes") or []
     if not ecos:
@@ -393,9 +440,9 @@ def procesar_webhook(data: dict) -> None:
                             print(f"Silencio total from={user_phone} motivo={motivo} text={user_text[:60]}", flush=True)
                             continue
                         print(f"Inbound text={user_text[:80]} filtro={motivo}")
-                        reply = generar_respuesta(user_phone, user_text)
-                        # Marcadores (entrega del panel + prueba Pro, pago) y corte del Asesor IA si no hay Pro vigente.
-                        venta_panel.procesar_respuesta(_WA, user_phone, reply)
+                        if venta_panel.procesar_posible_correo(_WA, user_phone, user_text):
+                            continue
+                        manejar_texto(_WA, user_phone, user_text)
 
                     elif msg_type == "image":
                         caption = (message_obj.get("image") or {}).get("caption") or ""
@@ -432,17 +479,17 @@ def procesar_webhook(data: dict) -> None:
 
 
 def generar_respuesta(user_phone: str, user_text: str) -> str:
-    historial = _historial.setdefault(user_phone, [])
-    historial.append(f"Cliente: {user_text}")
-    historial[:] = historial[-_MAX_TURNOS:]
-
+    """Llama a Gemini con el hilo (hasta 20 mensajes). El post-proceso va en manejar_texto."""
+    hilo = conversacion.historial_texto(user_phone, n=_MAX_TURNOS)
+    if not hilo:
+        hilo = f"Cliente: {user_text}"
     prompt = (
-        "Conversación reciente:\n"
-        + "\n".join(historial)
-        + "\n\nResponde solo el mensaje para el cliente en español, sin prefijos."
+        "Conversación reciente (responde PRIMERO lo último que dijo el cliente):\n"
+        + hilo
+        + "\n\nResponde solo el mensaje para el cliente en español, sin prefijos, 2 o 3 líneas, una sola pregunta."
     )
 
-    system_prompt = construir_system_prompt(user_phone)
+    system_prompt = construir_system_prompt(user_phone, user_text)
     last_err = None
     for nombre in _MODELOS:
         try:
@@ -457,24 +504,23 @@ def generar_respuesta(user_phone: str, user_text: str) -> str:
             texto = (ai_response.text or "").strip()
             if texto:
                 print(f"Gemini OK model={nombre}")
-                limpio = texto
-                for m in venta_panel.MARCADORES:
-                    limpio = limpio.replace(m, "")
-                historial.append(f"Asesor: {limpio.strip()}")
-                historial[:] = historial[-_MAX_TURNOS:]
                 return texto
         except Exception as e:
             last_err = e
             print(f"Error Gemini model={nombre}: {e}")
 
     print(f"Gemini all models failed: {last_err}")
-    texto = (
-        "Dame un momento, ya te respondo 🙏 "
-        f"Si buscas el {venta_panel.PANEL_NOMBRE}, en breve te ayudo."
-    )
-    historial.append(f"Asesor: {texto}")
-    historial[:] = historial[-_MAX_TURNOS:]
-    return texto
+    return "Dame un momento, ya te respondo 🙏"
+
+
+def manejar_texto(wa, user_phone: str, user_text: str) -> str:
+    """Registra el hilo, pide la respuesta, aplica las reglas de conversación y los marcadores."""
+    conversacion.registrar_inbound(user_phone, user_text)
+    reply = generar_respuesta(user_phone, user_text)
+    reply = conversacion.postprocesar(user_phone, reply, texto_in=user_text)
+    venta_panel.procesar_respuesta(wa, user_phone, reply)
+    conversacion.registrar_outbound(user_phone, reply)
+    return reply
 
 
 def _graph(path: str) -> str:
@@ -515,6 +561,14 @@ def send_whatsapp_image(to: str, link: str | None = None, media_id: str | None =
     _wa_post(to, "image", imagen)
 
 
+def send_whatsapp_template(to: str, name: str, lang: str = "es") -> None:
+    """Plantilla de WhatsApp (necesaria fuera de la ventana de 24 h). No imprime tokens."""
+    if not name:
+        return
+    cuerpo = {"name": name, "language": {"code": lang or "es"}}
+    _wa_post(to, "template", cuerpo)
+
+
 def download_whatsapp_media(media_id: str) -> tuple[bytes, str]:
     auth = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
     meta = requests.get(_graph(media_id), headers=auth, timeout=15)
@@ -534,3 +588,5 @@ class _WhatsApp:
 
 
 _WA = _WhatsApp()
+mercado_pago.configurar_wa(_WA)
+conversacion.configurar(enviar_texto=send_whatsapp_message, enviar_plantilla=send_whatsapp_template)
